@@ -134,10 +134,18 @@ struct interface {
 	bool ra_not_onlink;
 	bool no_dynamic_dhcp;
 
+	// RA
 	int learn_routes;
 	int default_router;
 	int managed;
 	int route_preference;
+	unsigned min_interval;
+	unsigned max_interval;
+	unsigned lifetime;
+	unsigned curhoplimit;
+	unsigned reachable;
+	unsigned retransmit;
+	unsigned max_mtu;
 
 	// DHCPv4
 	struct in_addr dhcpv4_start;

@@ -48,5 +48,5 @@ struct nd_opt_recursive_dns {
 #define MaxPreferredTime  (3 * MaxRtrAdvInterval)
 
 #define ND_RA_FLAG_PROXY	0x4
-#define ND_RA_PREF_HIGH	(1 << 3)
+#define ND_RA_PREF_HIGH		(1 << 3)
 #define ND_RA_PREF_LOW		(3 << 3)

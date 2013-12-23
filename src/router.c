@@ -262,6 +262,9 @@ static void send_router_advert(struct uloop_timeout *event)
 			container_of(event, struct interface, timer_rs);
 
 	int mtu = odhcpd_get_interface_mtu(iface->ifname);
+	if (iface->max_mtu && (unsigned)mtu > iface->max_mtu)
+		mtu = iface->max_mtu;
+
 	if (mtu < 0)
 		mtu = 1500;
 
@@ -282,6 +285,10 @@ static void send_router_advert(struct uloop_timeout *event)
 	if (iface->managed >= RELAYD_MANAGED_MFLAG)
 		adv.h.nd_ra_flags_reserved |= ND_RA_FLAG_MANAGED;
 
+	adv.h.nd_ra_curhoplimit = iface->curhoplimit;
+	adv.h.nd_ra_reachable = iface->reachable;
+	adv.h.nd_ra_retransmit = iface->retransmit;
+
 	if (iface->route_preference < 0)
 		adv.h.nd_ra_flags_reserved |= ND_RA_PREF_LOW;
 	else if (iface->route_preference > 0)
@@ -300,7 +307,7 @@ static void send_router_advert(struct uloop_timeout *event)
 		// Check default route
 		if (parse_routes(addrs, ipcnt) || iface->default_router > 1)
 			adv.h.nd_ra_router_lifetime =
-					htons(3 * MaxRtrAdvInterval);
+					htons(iface->lifetime);
 	}
 
 	// Construct Prefix Information options
@@ -316,10 +323,12 @@ static void send_router_advert(struct uloop_timeout *event)
 		if (addr->prefix > 64 || addr->has_class)
 			continue; // Address not suitable
 
-		if (addr->preferred > MaxPreferredTime)
-			addr->preferred = MaxPreferredTime;
+		if (addr->preferred > iface->lifetime)
+			addr->preferred = iface->lifetime;
 
-		if (addr->valid > MaxValidTime)
+		if (addr->valid > addr->preferred)
+			addr->valid = addr->preferred;
+		else if (addr->valid > MaxValidTime)
 			addr->valid = MaxValidTime;
 
 		struct nd_opt_prefix_info *p = NULL;
@@ -372,7 +381,7 @@ static void send_router_advert(struct uloop_timeout *event)
 	if (iface->dns_cnt > 0) {
 		dns_addr = iface->dns;
 		dns_cnt = iface->dns_cnt;
-		dns_time = 2 * MaxRtrAdvInterval;
+		dns_time = 2 * iface->max_interval;
 	}
 
 	if (!dns_addr)
@@ -414,7 +423,7 @@ static void send_router_advert(struct uloop_timeout *event)
 	search->len = search_len ? ((sizeof(*search) + search_padded) / 8) : 0;
 	search->pad = 0;
 	search->pad2 = 0;
-	search->lifetime = htonl(2 * MaxRtrAdvInterval);;
+	search->lifetime = htonl(iface->lifetime);
 	memcpy(search->name, search_domain, search_len);
 	memset(&search->name[search_len], 0, search_padded - search_len);
 
@@ -470,8 +479,8 @@ static void send_router_advert(struct uloop_timeout *event)
 	// Rearm timer
 	int msecs;
 	odhcpd_urandom(&msecs, sizeof(msecs));
-	msecs = (labs(msecs) % (1000 * (MaxRtrAdvInterval
-			- MinRtrAdvInterval))) + (MinRtrAdvInterval * 1000);
+	msecs = (labs(msecs) % (1000 * (iface->max_interval
+			- iface->min_interval))) + (iface->min_interval * 1000);
 	uloop_timeout_set(&iface->timer_rs, msecs);
 }
 

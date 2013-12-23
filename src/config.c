@@ -9,6 +9,10 @@
 
 #include "odhcpd.h"
 
+#define MaxRtrAdvInterval 600
+#define MinRtrAdvInterval (MaxRtrAdvInterval / 3)
+#define MaxPreferredTime  (3 * MaxRtrAdvInterval)
+
 static struct blob_buf b;
 static int reload_pipe[2];
 struct list_head leases = LIST_HEAD_INIT(leases);
@@ -33,8 +37,15 @@ enum {
 	IFACE_ATTR_DNS,
 	IFACE_ATTR_DOMAIN,
 	IFACE_ATTR_ULA_COMPAT,
+	IFACE_ATTR_RA_MIN_INTERVAL,
+	IFACE_ATTR_RA_MAX_INTERVAL,
+	IFACE_ATTR_RA_LIFETIME,
 	IFACE_ATTR_RA_DEFAULT,
 	IFACE_ATTR_RA_MANAGEMENT,
+	IFACE_ATTR_RA_HOPLIMIT,
+	IFACE_ATTR_RA_REACHABLE,
+	IFACE_ATTR_RA_RETRANSMIT,
+	IFACE_ATTR_RA_MAX_MTU,
 	IFACE_ATTR_RA_OFFLINK,
 	IFACE_ATTR_RA_PREFERENCE,
 	IFACE_ATTR_NDPROXY_ROUTING,
@@ -61,8 +72,15 @@ static const struct blobmsg_policy iface_attrs[IFACE_ATTR_MAX] = {
 	[IFACE_ATTR_DNS] = { .name = "dns", .type = BLOBMSG_TYPE_ARRAY },
 	[IFACE_ATTR_DOMAIN] = { .name = "domain", .type = BLOBMSG_TYPE_ARRAY },
 	[IFACE_ATTR_ULA_COMPAT] = { .name = "ula_compat", .type = BLOBMSG_TYPE_BOOL },
+	[IFACE_ATTR_RA_MIN_INTERVAL] = { .name = "ra_min_interval", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_MAX_INTERVAL] = { .name = "ra_max_interval", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_LIFETIME] = { .name = "ra_lifetime", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_DEFAULT] = { .name = "ra_default", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_MANAGEMENT] = { .name = "ra_management", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_HOPLIMIT] = { .name = "ra_hoplimit", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_REACHABLE] = { .name = "ra_reachable", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_RETRANSMIT] = { .name = "ra_retransmit", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_MAX_MTU] = { .name = "ra_max_mtu", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_OFFLINK] = { .name = "ra_offlink", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_RA_PREFERENCE] = { .name = "ra_preference", .type = BLOBMSG_TYPE_STRING },
 	[IFACE_ATTR_NDPROXY_ROUTING] = { .name = "ndproxy_routing", .type = BLOBMSG_TYPE_BOOL },
@@ -451,11 +469,52 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 	if ((c = tb[IFACE_ATTR_ULA_COMPAT]))
 		iface->deprecate_ula_if_public_avail = blobmsg_get_bool(c);
 
+	iface->min_interval = MinRtrAdvInterval;
+	iface->max_interval = MaxRtrAdvInterval;
+	iface->lifetime = MaxPreferredTime;
+
+	if (tb[IFACE_ATTR_RA_MIN_INTERVAL] || tb[IFACE_ATTR_RA_MAX_INTERVAL] ||
+		tb[IFACE_ATTR_RA_LIFETIME]) {
+		if ((c = tb[IFACE_ATTR_RA_MIN_INTERVAL]))
+			iface->min_interval = blobmsg_get_u32(c);
+
+		if ((c = tb[IFACE_ATTR_RA_MAX_INTERVAL]))
+			iface->max_interval = blobmsg_get_u32(c);
+
+		if ((c = tb[IFACE_ATTR_RA_LIFETIME]))
+			iface->lifetime = blobmsg_get_u32(c);
+
+		if ((iface->min_interval < 3) ||
+			(iface->min_interval > iface->max_interval * 3 / 4) ||
+			(iface->max_interval < 4) ||
+			(iface->max_interval > 1800) ||
+			(3 * iface->max_interval > iface->lifetime))
+			goto err;
+	}
+
 	if ((c = tb[IFACE_ATTR_RA_DEFAULT]))
 		iface->default_router = blobmsg_get_u32(c);
 
 	if ((c = tb[IFACE_ATTR_RA_MANAGEMENT]))
 		iface->managed = blobmsg_get_u32(c);
+
+	if ((c = tb[IFACE_ATTR_RA_HOPLIMIT])) {
+		iface->curhoplimit = blobmsg_get_u32(c);
+		if (iface->curhoplimit > 255)
+			goto err;
+	}
+
+	if ((c = tb[IFACE_ATTR_RA_REACHABLE])) {
+		iface->reachable = blobmsg_get_u32(c);
+		if (iface->reachable > 3600000)
+			goto err;
+	}
+
+	if ((c = tb[IFACE_ATTR_RA_RETRANSMIT]))
+		iface->retransmit = blobmsg_get_u32(c);
+
+	if ((c = tb[IFACE_ATTR_RA_MAX_MTU]))
+		iface->max_mtu = blobmsg_get_u32(c);
 
 	if ((c = tb[IFACE_ATTR_RA_OFFLINK]))
 		iface->ra_not_onlink = blobmsg_get_bool(c);
