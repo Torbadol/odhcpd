@@ -130,57 +130,40 @@ static void sigusr1_refresh(_unused int signal)
 			uloop_timeout_set(&iface->timer_rs, 1000);
 }
 
-static int router_icmpv6_valid(struct sockaddr_in6 *source, uint8_t *data, size_t len)
+static bool router_icmpv6_valid(struct sockaddr_in6 *source, uint8_t *data, size_t len)
 {
 	struct icmp6_hdr *hdr = (struct icmp6_hdr *)data;
-	struct icmpv6_opt *opt;
-	size_t optlen;
+	struct icmpv6_opt *opt, *end = (struct icmpv6_opt*)&data[len];
+
 
 	/* Hoplimit is already checked in odhcpd_receive_packets */
-	if (len < sizeof(*hdr))
-		return 0;
-
-	if (hdr->icmp6_code)
-		return 0;
+	if (len < sizeof(*hdr) || hdr->icmp6_code)
+		return false;
 
 	switch (hdr->icmp6_type) {
 	case ND_ROUTER_ADVERT:
 		if (!IN6_IS_ADDR_LINKLOCAL(&source->sin6_addr))
-			return 0;
+			return false;
 
 		opt = (struct icmpv6_opt *)((struct nd_router_advert *)data + 1);
-		optlen = len - sizeof(struct nd_router_advert);
 		break;
 
 	case ND_ROUTER_SOLICIT:
 		opt = (struct icmpv6_opt *)((struct nd_router_solicit *)data + 1);
-		optlen = len - sizeof(struct nd_router_solicit);
 		break;
 
 	default:
-		return 0;
+		return false;
 	}
 
-	while (optlen > 0) {
-		size_t l = opt->len << 3;
+	icmpv6_for_each_option(opt, opt, end)
+		if (opt->type == ND_OPT_SOURCE_LINKADDR &&
+				IN6_IS_ADDR_UNSPECIFIED(&source->sin6_addr) &&
+				hdr->icmp6_type == ND_ROUTER_SOLICIT)
+			return false;
 
-		if (optlen < sizeof(*opt))
-			return 0;
-
-		if (l > optlen || l == 0)
-			return 0;
-
-		if (opt->type == ND_OPT_SOURCE_LINKADDR && IN6_IS_ADDR_UNSPECIFIED(&source->sin6_addr) &&
-			hdr->icmp6_type == ND_ROUTER_SOLICIT) {
-			return 0;
-		}
-
-		opt = (struct icmpv6_opt *)(((uint8_t *)opt) + l);
-
-		optlen -= l;
-	}
-
-	return 1;
+	// Check all options parsed successfully
+	return opt == end;
 }
 
 // Event handler for incoming ICMPv6 packets
@@ -188,7 +171,7 @@ static void handle_icmpv6(void *addr, void *data, size_t len,
 		struct interface *iface)
 {
 	struct icmp6_hdr *hdr = data;
-	
+
 	if (!router_icmpv6_valid(addr, data, len))
 		return;
 
@@ -270,7 +253,7 @@ static void send_router_advert(struct uloop_timeout *event)
 
 	struct {
 		struct nd_router_advert h;
-		struct nd_opt_slla lladdr;
+		struct icmpv6_opt lladdr;
 		struct nd_opt_mtu mtu;
 		struct nd_opt_prefix_info prefix[RELAYD_MAX_PREFIXES];
 	} adv = {
@@ -293,7 +276,7 @@ static void send_router_advert(struct uloop_timeout *event)
 		adv.h.nd_ra_flags_reserved |= ND_RA_PREF_LOW;
 	else if (iface->route_preference > 0)
 		adv.h.nd_ra_flags_reserved |= ND_RA_PREF_HIGH;
-	odhcpd_get_mac(iface, adv.lladdr.addr);
+	odhcpd_get_mac(iface, adv.lladdr.data);
 
 	// If not currently shutting down
 	struct odhcpd_ipaddr addrs[RELAYD_MAX_PREFIXES];
@@ -387,7 +370,14 @@ static void send_router_advert(struct uloop_timeout *event)
 	if (!dns_addr)
 		dns_cnt = 0;
 
-	struct nd_opt_recursive_dns dns = {ND_OPT_RECURSIVE_DNS, (1 + (2 * dns_cnt)), 0, 0, htonl(dns_time)};
+	struct {
+		uint8_t type;
+		uint8_t len;
+		uint8_t pad;
+		uint8_t pad2;
+		uint32_t lifetime;
+	} dns = {ND_OPT_RECURSIVE_DNS, (1 + (2 * dns_cnt)), 0, 0, htonl(dns_time)};
+
 
 
 	// DNS Search options
@@ -516,12 +506,11 @@ static void forward_router_advertisement(uint8_t *data, size_t len)
 	icmpv6_for_each_option(opt, &adv[1], end) {
 		if (opt->type == ND_OPT_SOURCE_LINKADDR) {
 			// Store address of source MAC-address
-			mac_ptr = ((struct nd_opt_slla *)opt)->addr;
+			mac_ptr = opt->data;
 		} else if (opt->type == ND_OPT_RECURSIVE_DNS && opt->len > 1) {
-			struct nd_opt_recursive_dns *dns = (struct nd_opt_recursive_dns *)opt;
 			// Check if we have to rewrite DNS
-			dns_ptr = (struct in6_addr *)&dns[1];
-			dns_count = (dns->len - 1) / 2;
+			dns_ptr = (struct in6_addr*)&opt->data[6];
+			dns_count = (opt->len - 1) / 2;
 		}
 	}
 
