@@ -15,7 +15,7 @@
 #include "odhcpd.h"
 #include "dhcpv6.h"
 #include "dhcpv4.h"
-#include "md5.h"
+#include "libubox/md5.h"
 
 #include <time.h>
 #include <errno.h>
@@ -32,13 +32,11 @@
 static void update(struct interface *iface);
 static void reconf_timer(struct uloop_timeout *event);
 static struct uloop_timeout reconf_event = {.cb = reconf_timer};
-static int socket_fd = -1;
 static uint32_t serial = 0;
 
 
-int dhcpv6_ia_init(int dhcpv6_socket)
+int dhcpv6_ia_init(void)
 {
-	socket_fd = dhcpv6_socket;
 	uloop_timeout_set(&reconf_event, 2000);
 	return 0;
 }
@@ -87,7 +85,12 @@ int setup_dhcpv6_ia_interface(struct interface *iface, bool enable)
 
 			a->clid_len = lease->duid_len;
 			a->length = 128;
-			a->assigned = lease->hostid;
+			if (lease->hostid) {
+				a->assigned = lease->hostid;
+			} else {
+				uint32_t i4a = ntohl(lease->ipaddr.s_addr) & 0xff;
+				a->assigned = ((i4a / 100) << 8) | (((i4a % 100) / 10) << 4) | (i4a % 10);
+			}
 			odhcpd_urandom(a->key, sizeof(a->key));
 			memcpy(a->clid_data, lease->duid, a->clid_len);
 			memcpy(a->mac, lease->mac.ether_addr_octet, sizeof(a->mac));
@@ -178,7 +181,7 @@ static int send_reconf(struct interface *iface, struct dhcpv6_assignment *assign
 	md5_hash(reconf_msg.auth.key, 16, &md5);
 	md5_end(reconf_msg.auth.key, &md5);
 
-	return odhcpd_send(socket_fd, &assign->peer, &iov, 1, iface);
+	return odhcpd_send(iface->dhcpv6_event.uloop.fd, &assign->peer, &iov, 1, iface);
 }
 
 
@@ -552,10 +555,6 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 		if (a) {
 			uint32_t pref = 3600;
 			uint32_t valid = 3600;
-			bool have_non_ula = false;
-			for (size_t i = 0; i < iface->ia_addr_len; ++i)
-				if ((iface->ia_addr[i].addr.s6_addr[0] & 0xfe) != 0xfc)
-					have_non_ula = true;
 
 			for (size_t i = 0; i < iface->ia_addr_len; ++i) {
 				bool match = true;
@@ -578,12 +577,6 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 
 				if (iface->ia_addr[i].prefix > 64 ||
 						iface->ia_addr[i].preferred <= (uint32_t)now)
-					continue;
-
-				// ULA-deprecation compatibility workaround
-				if ((iface->ia_addr[i].addr.s6_addr[0] & 0xfe) == 0xfc &&
-						a->length == 128 && have_non_ula &&
-						iface->deprecate_ula_if_public_avail)
 					continue;
 
 				if (prefix_pref > 86400)

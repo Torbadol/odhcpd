@@ -115,6 +115,7 @@ struct interface {
 	bool ia_reconf;
 
 	// DHCPv4
+	struct odhcpd_event dhcpv6_event;
 	struct odhcpd_event dhcpv4_event;
 	struct list_head dhcpv4_assignments;
 
@@ -130,7 +131,6 @@ struct interface {
 	bool master;
 	bool ignore;
 	bool always_rewrite_dns;
-	bool deprecate_ula_if_public_avail;
 	bool ra_not_onlink;
 	bool no_dynamic_dhcp;
 

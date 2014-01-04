@@ -36,7 +36,6 @@ enum {
 	IFACE_ATTR_NDP,
 	IFACE_ATTR_DNS,
 	IFACE_ATTR_DOMAIN,
-	IFACE_ATTR_ULA_COMPAT,
 	IFACE_ATTR_RA_MIN_INTERVAL,
 	IFACE_ATTR_RA_MAX_INTERVAL,
 	IFACE_ATTR_RA_LIFETIME,
@@ -71,7 +70,6 @@ static const struct blobmsg_policy iface_attrs[IFACE_ATTR_MAX] = {
 	[IFACE_ATTR_NDP] = { .name = "ndp", .type = BLOBMSG_TYPE_STRING },
 	[IFACE_ATTR_DNS] = { .name = "dns", .type = BLOBMSG_TYPE_ARRAY },
 	[IFACE_ATTR_DOMAIN] = { .name = "domain", .type = BLOBMSG_TYPE_ARRAY },
-	[IFACE_ATTR_ULA_COMPAT] = { .name = "ula_compat", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_RA_MIN_INTERVAL] = { .name = "ra_min_interval", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_MAX_INTERVAL] = { .name = "ra_max_interval", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_LIFETIME] = { .name = "ra_lifetime", .type = BLOBMSG_TYPE_INT32 },
@@ -107,7 +105,7 @@ enum {
 	LEASE_ATTR_MAC,
 	LEASE_ATTR_DUID,
 	LEASE_ATTR_HOSTID,
-	LEASE_ATTR_HOSTNAME,
+	LEASE_ATTR_NAME,
 	LEASE_ATTR_MAX
 };
 
@@ -117,7 +115,7 @@ static const struct blobmsg_policy lease_attrs[LEASE_ATTR_MAX] = {
 	[LEASE_ATTR_MAC] = { .name = "mac", .type = BLOBMSG_TYPE_STRING },
 	[LEASE_ATTR_DUID] = { .name = "duid", .type = BLOBMSG_TYPE_STRING },
 	[LEASE_ATTR_HOSTID] = { .name = "hostid", .type = BLOBMSG_TYPE_STRING },
-	[LEASE_ATTR_HOSTNAME] = { .name = "hostname", .type = BLOBMSG_TYPE_STRING },
+	[LEASE_ATTR_NAME] = { .name = "name", .type = BLOBMSG_TYPE_STRING },
 };
 
 
@@ -232,7 +230,7 @@ static int set_lease(struct uci_section *s)
 	blobmsg_parse(lease_attrs, LEASE_ATTR_MAX, tb, blob_data(b.head), blob_len(b.head));
 
 	size_t hostlen = 1;
-	if ((c = tb[LEASE_ATTR_HOSTNAME]))
+	if ((c = tb[LEASE_ATTR_NAME]))
 		hostlen = blobmsg_data_len(c);
 
 	struct lease *lease = calloc(1, sizeof(*lease) + hostlen);
@@ -466,9 +464,6 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		}
 	}
 
-	if ((c = tb[IFACE_ATTR_ULA_COMPAT]))
-		iface->deprecate_ula_if_public_avail = blobmsg_get_bool(c);
-
 	iface->min_interval = MinRtrAdvInterval;
 	iface->max_interval = MaxRtrAdvInterval;
 	iface->lifetime = MaxPreferredTime;
@@ -534,6 +529,8 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 
 	if ((c = tb[IFACE_ATTR_NDPROXY_ROUTING]))
 		iface->learn_routes = blobmsg_get_bool(c);
+	else
+		iface->learn_routes = true;
 
 	if ((c = tb[IFACE_ATTR_NDPROXY_SLAVE]))
 		iface->external = blobmsg_get_bool(c);
@@ -556,7 +553,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		}
 	}
 
-	iface->ignore = (iface->ifindex = if_nametoindex(iface->ifname)) < 0;
+	iface->ignore = (iface->ifindex = if_nametoindex(iface->ifname)) <= 0;
 	return 0;
 
 err:
@@ -595,7 +592,7 @@ void odhcpd_reload(void)
 		struct uci_element *e;
 		uci_foreach_element(&dhcp->sections, e) {
 			struct uci_section *s = uci_to_section(e);
-			if (!strcmp(s->type, "lease"))
+			if (!strcmp(s->type, "host"))
 				set_lease(s);
 			else if (!strcmp(s->type, "odhcpd"))
 				set_config(s);
