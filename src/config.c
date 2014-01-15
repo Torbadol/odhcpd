@@ -298,9 +298,6 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 			return -1;
 
 		strncpy(iface->name, name, sizeof(iface->name) - 1);
-		iface->min_interval = MinRtrAdvInterval;
-		iface->max_interval = MaxRtrAdvInterval;
-		iface->lifetime = MaxPreferredTime;
 
 		list_add(&iface->head, &interfaces);
 	}
@@ -470,6 +467,15 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 			iface->search_len += len;
 		}
 	}
+
+	if (!iface->min_interval)
+		iface->min_interval = MinRtrAdvInterval;
+
+	if (!iface->max_interval)
+		iface->max_interval = MaxRtrAdvInterval;
+
+	if (!iface->lifetime)
+		iface->lifetime = MaxPreferredTime;
 
 	if (tb[IFACE_ATTR_RA_MIN_INTERVAL] || tb[IFACE_ATTR_RA_MAX_INTERVAL] ||
 		tb[IFACE_ATTR_RA_LIFETIME]) {
