@@ -461,12 +461,14 @@ static void send_router_advert(struct uloop_timeout *event)
 	odhcpd_send(router_event.uloop.fd,
 			&all_nodes, iov, ARRAY_SIZE(iov), iface);
 
-	// Rearm timer
-	int msecs;
-	odhcpd_urandom(&msecs, sizeof(msecs));
-	msecs = (labs(msecs) % (1000 * (iface->max_interval
-			- iface->min_interval))) + (iface->min_interval * 1000);
-	uloop_timeout_set(&iface->timer_rs, msecs);
+	// Rearm timer if not shut down
+	if (event->cb) {
+		int msecs;
+		odhcpd_urandom(&msecs, sizeof(msecs));
+		msecs = (labs(msecs) % (1000 * (iface->max_interval
+				- iface->min_interval))) + (iface->min_interval * 1000);
+		uloop_timeout_set(&iface->timer_rs, msecs);
+	}
 }
 
 
