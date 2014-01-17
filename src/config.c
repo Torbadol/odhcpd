@@ -501,6 +501,8 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 
 	if ((c = tb[IFACE_ATTR_RA_MANAGEMENT]))
 		iface->managed = blobmsg_get_u32(c);
+	else
+		iface->managed = 1;
 
 	if ((c = tb[IFACE_ATTR_RA_HOPLIMIT])) {
 		iface->curhoplimit = blobmsg_get_u32(c);
