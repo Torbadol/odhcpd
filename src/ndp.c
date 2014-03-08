@@ -183,6 +183,14 @@ int setup_ndp_interface(struct interface *iface, bool enable)
 					syslog(LOG_ERR, "Invalid static NDP-prefix %s", entry);
 					return -1;
 				}
+				
+				*sep = 0;
+				n->len = atoi(sep + 1);
+				if (inet_pton(AF_INET6, entry, &n->addr) != 1 || n->len > 128) {
+					free(n);
+					syslog(LOG_ERR, "Invalid static NDP-prefix %s/%s", entry, sep + 1);
+					return -1;
+				}
 
 				*sep = 0;
 				n->len = atoi(sep + 1);
