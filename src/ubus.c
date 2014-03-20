@@ -13,6 +13,7 @@ static struct ubus_subscriber netifd;
 static struct blob_buf b;
 static struct blob_attr *dump = NULL;
 static uint32_t objid = 0;
+static struct ubus_request req_dump = { .list = LIST_HEAD_INIT(req_dump.list) };
 
 
 static int handle_dhcpv4_leases(struct ubus_context *ctx, _unused struct ubus_object *obj,
@@ -188,6 +189,19 @@ static void handle_dump(_unused struct ubus_request *req, _unused int type, stru
 }
 
 
+static void update_netifd(bool subscribe)
+{
+	if (subscribe)
+		ubus_subscribe(ubus, &netifd, objid);
+
+	ubus_abort_request(ubus, &req_dump);
+	if (!ubus_invoke_async(ubus, objid, "dump", NULL, &req_dump)) {
+		req_dump.data_cb = handle_dump;
+		ubus_complete_request_async(ubus, &req_dump);
+	}
+}
+
+
 static int handle_update(_unused struct ubus_context *ctx, _unused struct ubus_object *obj,
 		_unused struct ubus_request_data *req, _unused const char *method,
 		struct blob_attr *msg)
@@ -208,29 +222,22 @@ static int handle_update(_unused struct ubus_context *ctx, _unused struct ubus_o
 	if (iface && iface->ignore)
 		return 0;
 
-	ubus_invoke(ubus, objid, "dump", NULL, handle_dump, NULL, 0);
+	update_netifd(false);
 	return 0;
-}
-
-
-static void subscribe_netifd(void)
-{
-	ubus_subscribe(ubus, &netifd, objid);
-	ubus_invoke(ubus, objid, "dump", NULL, handle_dump, NULL, 0);
 }
 
 
 void ubus_apply_network(void)
 {
-	struct blob_attr *c;
+	struct blob_attr *a;
 	unsigned rem;
 
 	if (!dump)
 		return;
 
-	blobmsg_for_each_attr(c, dump, rem) {
+	blobmsg_for_each_attr(a, dump, rem) {
 		struct blob_attr *tb[IFACE_ATTR_MAX];
-		blobmsg_parse(iface_attrs, IFACE_ATTR_MAX, tb, blobmsg_data(c), blobmsg_data_len(c));
+		blobmsg_parse(iface_attrs, IFACE_ATTR_MAX, tb, blobmsg_data(a), blobmsg_data_len(a));
 
 		if (!tb[IFACE_ATTR_INTERFACE] || !tb[IFACE_ATTR_DATA])
 			continue;
@@ -241,8 +248,8 @@ void ubus_apply_network(void)
 				blobmsg_get_string(tb[IFACE_ATTR_IFNAME]) : "";
 
 		bool matched = false;
-		struct interface *c;
-		list_for_each_entry(c, &interfaces, head) {
+		struct interface *c, *n;
+		list_for_each_entry_safe(c, n, &interfaces, head) {
 			char *f = memmem(c->upstream, c->upstream_len,
 					interface, strlen(interface) + 1);
 			bool cmatched = !strcmp(interface, c->name) || !strcmp(ifname, c->ifname);
@@ -288,7 +295,7 @@ static void handle_event(_unused struct ubus_context *ctx, _unused struct ubus_e
 		return;
 
 	objid = blobmsg_get_u32(tb[OBJ_ATTR_ID]);
-	subscribe_netifd();
+	update_netifd(true);
 }
 
 static struct ubus_event_handler event_handler = { .cb = handle_event };
@@ -429,7 +436,7 @@ int init_ubus(void)
 	ubus_add_object(ubus, &main_object);
 	ubus_register_event_handler(ubus, &event_handler, "ubus.object.add");
 	if (!ubus_lookup_id(ubus, "network.interface", &objid))
-		subscribe_netifd();
+		update_netifd(true);
 
 	return 0;
 }
