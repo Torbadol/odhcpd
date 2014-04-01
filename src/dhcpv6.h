@@ -13,6 +13,8 @@
  */
 #pragma once
 
+#include <libubox/ustream.h>
+
 #define ALL_DHCPV6_RELAYS {{{0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,\
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02}}}
 
@@ -54,6 +56,7 @@
 #define DHCPV6_OPT_IA_PREFIX 26
 #define DHCPV6_OPT_INFO_REFRESH 32
 #define DHCPV6_OPT_FQDN 39
+#define DHCPV6_OPT_SOL_MAX_RT 82
 
 #ifdef EXT_PREFIX_CLASS
 /* draft-bhandari-dhc-class-based-prefix, not yet standardized */
@@ -152,8 +155,22 @@ struct dhcpv6_assignment {
 	uint8_t mac[6];
 	uint8_t length; // length == 128 -> IA_NA, length <= 64 -> IA_PD
 	bool accept_reconf;
+
+	struct odhcpd_ipaddr *managed;
+	ssize_t managed_size;
+	struct ustream_fd managed_sock;
+
 	uint8_t clid_len;
 	uint8_t clid_data[];
+};
+
+struct dhcpv6_cer_id {
+	uint16_t type;
+	uint16_t len;
+	uint16_t reserved;
+	uint16_t auth_type;
+	uint8_t auth[16];
+	struct in6_addr addr;
 };
 
 
@@ -165,7 +182,7 @@ struct dhcpv6_assignment {
 		_o += 4 + (_o[2] << 8 | _o[3]))
 
 int dhcpv6_init_ia(struct interface *iface, int socket);
-size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct interface *iface,
+ssize_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct interface *iface,
 		const struct sockaddr_in6 *addr, const void *data, const uint8_t *end);
 int dhcpv6_ia_init(void);
 int setup_dhcpv6_ia_interface(struct interface *iface, bool enable);
