@@ -123,8 +123,6 @@ struct interface {
 	// Managed PD
 	char dhcpv6_pd_manager[128];
 	struct in6_addr dhcpv6_pd_cer;
-	void *dhcpv6_raw;
-	size_t dhcpv6_raw_len;
 
 	// Services
 	enum odhcpd_mode ra;
@@ -167,11 +165,16 @@ struct interface {
 	uint8_t *search;
 	size_t search_len;
 
+	void *dhcpv6_raw;
+	size_t dhcpv6_raw_len;
+
 	char* static_ndp;
 	size_t static_ndp_len;
 
 	char *upstream;
 	size_t upstream_len;
+
+	char *filter_class;
 };
 
 extern struct list_head interfaces;

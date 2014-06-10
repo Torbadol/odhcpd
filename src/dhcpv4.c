@@ -37,7 +37,6 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 static struct dhcpv4_assignment* dhcpv4_lease(struct interface *iface,
 		enum dhcpv4_msg msg, const uint8_t *mac, struct in_addr reqaddr,
 		const char *hostname);
-static const char *excluded_class = "HOMENET";
 
 // Create socket and register events
 int init_dhcpv4(void)
@@ -120,16 +119,22 @@ int setup_dhcpv4_interface(struct interface *iface, bool enable)
 						(addr.s_addr & mask.s_addr);
 				iface->dhcpv4_end.s_addr = htonl(end) |
 						(addr.s_addr & mask.s_addr);
-			} else if (ntohl(mask.s_addr) <= 0xffffffc0) {
+			} else if (ntohl(mask.s_addr) <= 0xfffffff0) {
 				start = addr.s_addr & mask.s_addr;
 				end = addr.s_addr & mask.s_addr;
 
 				if (ntohl(mask.s_addr) <= 0xffffff00) {
 					iface->dhcpv4_start.s_addr = start | htonl(100);
 					iface->dhcpv4_end.s_addr = end | htonl(250);
-				} else {
+				} else if (ntohl(mask.s_addr) <= 0xffffffc0) {
 					iface->dhcpv4_start.s_addr = start | htonl(10);
-					iface->dhcpv4_end.s_addr = end | htonl(59);
+					iface->dhcpv4_end.s_addr = end | htonl(60);
+				} else if (ntohl(mask.s_addr) <= 0xffffffe0) {
+					iface->dhcpv4_start.s_addr = start | htonl(10);
+					iface->dhcpv4_end.s_addr = end | htonl(30);
+				} else {
+					iface->dhcpv4_start.s_addr = start | htonl(3);
+					iface->dhcpv4_end.s_addr = end | htonl(12);
 				}
 			}
 
@@ -294,11 +299,11 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 		} else if (opt->type == DHCPV4_OPT_SERVERID && opt->len == 4) {
 			if (memcmp(opt->data, &ifaddr.sin_addr, 4))
 				return;
-		} else if (opt->type == DHCPV4_OPT_USER_CLASS) {
+		} else if (iface->filter_class && opt->type == DHCPV4_OPT_USER_CLASS) {
 			uint8_t *c = opt->data, *cend = &opt->data[opt->len];
 			for (; c < cend && &c[*c] < cend; c = &c[1 + *c]) {
-				size_t elen = strlen(excluded_class);
-				if (*c == elen && !memcmp(&c[1], excluded_class, elen))
+				size_t elen = strlen(iface->filter_class);
+				if (*c == elen && !memcmp(&c[1], iface->filter_class, elen))
 					return; // Ignore from homenet
 			}
 		}
