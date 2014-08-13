@@ -45,6 +45,29 @@ int init_dhcpv4(void)
 	return 0;
 }
 
+char *dhcpv4_msg_to_string(uint8_t reqmsg)
+{
+	switch (reqmsg) {
+	case (DHCPV4_MSG_DISCOVER):
+		return "DHCPV4_MSG_DISCOVER";
+	case (DHCPV4_MSG_OFFER):
+		return "DHCPV4_MSG_OFFER";
+	case (DHCPV4_MSG_REQUEST):
+		return "DHCPV4_MSG_REQUEST";
+	case (DHCPV4_MSG_DECLINE):
+		return "DHCPV4_MSG_DECLINE";
+	case (DHCPV4_MSG_ACK):
+		return "DHCPV4_MSG_ACK";
+	case (DHCPV4_MSG_NAK):
+		return "DHCPV4_MSG_NAK";
+	case (DHCPV4_MSG_RELEASE):
+		return "DHCPV4_MSG_RELEASE";
+	case (DHCPV4_MSG_INFORM):
+		return "DHCPV4_MSG_INFORM";
+	default:
+		return "UNKNOWN";
+	}
+}
 
 int setup_dhcpv4_interface(struct interface *iface, bool enable)
 {
@@ -334,8 +357,22 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 	} else if (reqmsg == DHCPV4_MSG_REQUEST && reqaddr.s_addr &&
 			reqaddr.s_addr != htonl(lease->addr)) {
 		msg = DHCPV4_MSG_NAK;
-		lease = NULL;
+		/*
+		 * DHCP client requested an IP which we can't offer to him. Probably the
+		 * client changed the network. The reply type is set to DHCPV4_MSG_NAK,
+		 * because the client should not use that IP.
+		 *
+		 * For modern devices we build an answer that includes a valid IP, like
+		 * a DHCPV4_MSG_ACK. The client will use that IP and doesn't need to
+		 * perform additional DHCP round trips.
+		 *
+		 */
 	}
+
+	syslog(LOG_WARNING, "received %s from %x:%x:%x:%x:%x:%x",
+			dhcpv4_msg_to_string(reqmsg),
+			req->chaddr[0],req->chaddr[1],req->chaddr[2],
+			req->chaddr[3],req->chaddr[4],req->chaddr[5]);
 
 	if (reqmsg == DHCPV4_MSG_DECLINE || reqmsg == DHCPV4_MSG_RELEASE)
 		return;
@@ -384,8 +421,11 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 					len, search_buf);
 	}
 
-	dhcpv4_put(&reply, &cookie, DHCPV4_OPT_ROUTER, 4, &ifaddr.sin_addr);
-
+	if (iface->dhcpv4_router_cnt == 0)
+		dhcpv4_put(&reply, &cookie, DHCPV4_OPT_ROUTER, 4, &ifaddr.sin_addr);
+	else
+		dhcpv4_put(&reply, &cookie, DHCPV4_OPT_ROUTER,
+				4 * iface->dhcpv4_router_cnt, iface->dhcpv4_router);
 
 
 	if (iface->dhcpv4_dns_cnt == 0)
@@ -418,6 +458,11 @@ static void handle_dhcpv4(void *addr, void *data, size_t len,
 		memcpy(arp.arp_dev, iface->ifname, sizeof(arp.arp_dev));
 		ioctl(sock, SIOCSARP, &arp);
 	}
+
+	syslog(LOG_WARNING, "sending %s to %x:%x:%x:%x:%x:%x",
+			dhcpv4_msg_to_string(msg),
+			req->chaddr[0],req->chaddr[1],req->chaddr[2],
+			req->chaddr[3],req->chaddr[4],req->chaddr[5]);
 
 	sendto(sock, &reply, sizeof(reply), MSG_DONTWAIT,
 			(struct sockaddr*)&dest, sizeof(dest));
