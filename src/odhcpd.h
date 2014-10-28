@@ -118,6 +118,7 @@ struct interface {
 	// DHCPv4
 	struct odhcpd_event dhcpv6_event;
 	struct odhcpd_event dhcpv4_event;
+	struct odhcpd_event ndp_event;
 	struct list_head dhcpv4_assignments;
 
 	// Managed PD
@@ -137,6 +138,7 @@ struct interface {
 	bool ignore;
 	bool always_rewrite_dns;
 	bool ra_not_onlink;
+	bool ra_advrouter;
 	bool no_dynamic_dhcp;
 
 	// RA
@@ -170,9 +172,6 @@ struct interface {
 	void *dhcpv6_raw;
 	size_t dhcpv6_raw_len;
 
-	char* static_ndp;
-	size_t static_ndp_len;
-
 	char *upstream;
 	size_t upstream_len;
 
@@ -188,6 +187,7 @@ extern struct list_head interfaces;
 // Exported main functions
 int odhcpd_open_rtnl(void);
 int odhcpd_register(struct odhcpd_event *event);
+void odhcpd_process(struct odhcpd_event *event);
 
 ssize_t odhcpd_send(int socket, struct sockaddr_in6 *dest,
 		struct iovec *iov, size_t iov_len,

@@ -31,7 +31,7 @@ static void forward_router_advertisement(uint8_t *data, size_t len);
 
 static void handle_icmpv6(void *addr, void *data, size_t len,
 		struct interface *iface, void *dest);
-static void send_router_advert(struct uloop_timeout *event);
+static void trigger_router_advert(struct uloop_timeout *event);
 static void sigusr1_refresh(int signal);
 
 static struct odhcpd_event router_event = {{.fd = -1}, handle_icmpv6};
@@ -104,7 +104,7 @@ int setup_router_interface(struct interface *iface, bool enable)
 
 	if (!enable) {
 		if (iface->ra)
-			send_router_advert(&iface->timer_rs);
+			trigger_router_advert(&iface->timer_rs);
 	} else {
 		void *mreq = &all_routers;
 
@@ -112,8 +112,8 @@ int setup_router_interface(struct interface *iface, bool enable)
 			mreq = &all_nodes;
 			forward_router_solicitation(iface);
 		} else if (iface->ra == RELAYD_SERVER && !iface->master) {
-			iface->timer_rs.cb = send_router_advert;
-			send_router_advert(&iface->timer_rs);
+			iface->timer_rs.cb = trigger_router_advert;
+			trigger_router_advert(&iface->timer_rs);
 		}
 
 		if (iface->ra == RELAYD_RELAY || (iface->ra == RELAYD_SERVER && !iface->master))
@@ -169,26 +169,6 @@ static bool router_icmpv6_valid(struct sockaddr_in6 *source, uint8_t *data, size
 	return opt == end;
 }
 
-// Event handler for incoming ICMPv6 packets
-static void handle_icmpv6(void *addr, void *data, size_t len,
-		struct interface *iface, _unused void *dest)
-{
-	struct icmp6_hdr *hdr = data;
-
-	if (!router_icmpv6_valid(addr, data, len))
-		return;
-
-	if ((iface->ra == RELAYD_SERVER && !iface->master)) { // Server mode
-		if (hdr->icmp6_type == ND_ROUTER_SOLICIT)
-			send_router_advert(&iface->timer_rs);
-	} else if (iface->ra == RELAYD_RELAY) { // Relay mode
-		if (hdr->icmp6_type == ND_ROUTER_ADVERT && iface->master)
-			forward_router_advertisement(data, len);
-		else if (hdr->icmp6_type == ND_ROUTER_SOLICIT && !iface->master)
-			forward_router_solicitation(odhcpd_get_master_interface());
-	}
-}
-
 
 // Detect whether a default route exists, also find the source prefixes
 static bool parse_routes(struct odhcpd_ipaddr *n, ssize_t len)
@@ -228,11 +208,8 @@ static bool parse_routes(struct odhcpd_ipaddr *n, ssize_t len)
 
 
 // Router Advert server mode
-static void send_router_advert(struct uloop_timeout *event)
+static uint64_t send_router_advert(struct interface *iface, const struct in6_addr *from)
 {
-	struct interface *iface =
-			container_of(event, struct interface, timer_rs);
-
 	int mtu = odhcpd_get_interface_mtu(iface->ifname);
 	if (iface->max_mtu && (unsigned)mtu > iface->max_mtu)
 		mtu = iface->max_mtu;
@@ -273,7 +250,7 @@ static void send_router_advert(struct uloop_timeout *event)
 	uint64_t maxpreferred = 0;
 
 	// If not shutdown
-	if (event->cb) {
+	if (iface->timer_rs.cb) {
 		ipcnt = odhcpd_get_interface_addresses(iface->ifindex,
 				addrs, ARRAY_SIZE(addrs));
 
@@ -326,7 +303,8 @@ static void send_router_advert(struct uloop_timeout *event)
 				maxpreferred = 1000 * addr->preferred;
 		}
 
-		odhcpd_bmemcpy(&p->nd_opt_pi_prefix, &addr->addr, addr->prefix);
+		odhcpd_bmemcpy(&p->nd_opt_pi_prefix, &addr->addr,
+				(iface->ra_advrouter) ? 128 : addr->prefix);
 		p->nd_opt_pi_type = ND_OPT_PREFIX_INFORMATION;
 		p->nd_opt_pi_len = 4;
 		p->nd_opt_pi_prefix_len = (addr->prefix < 64) ? 64 : addr->prefix;
@@ -335,6 +313,8 @@ static void send_router_advert(struct uloop_timeout *event)
 			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_ONLINK;
 		if (iface->managed < RELAYD_MANAGED_NO_AFLAG && addr->prefix <= 64)
 			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_AUTO;
+		if (iface->ra_advrouter)
+			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_RADDR;
 		p->nd_opt_pi_valid_time = htonl(addr->valid);
 		p->nd_opt_pi_preferred_time = htonl(addr->preferred);
 
@@ -395,10 +375,6 @@ static void send_router_advert(struct uloop_timeout *event)
 		uint8_t name[];
 	} *search = alloca(sizeof(*search) + search_padded);
 
-	if (!search) {
-		syslog(LOG_ERR, "Alloca failed for dns search on interface %s", iface->ifname);
-		return;
-	}
 	search->type = ND_OPT_DNS_SEARCH;
 	search->len = search_len ? ((sizeof(*search) + search_padded) / 8) : 0;
 	search->pad = 0;
@@ -447,36 +423,77 @@ static void send_router_advert(struct uloop_timeout *event)
 		++routes_cnt;
 	}
 
+	// Calculate periodic transmit
+	int msecs = 0;
+	uint32_t maxival = iface->max_interval * 1000;
+	uint32_t minival = iface->min_interval * 1000;
+
+	if (maxpreferred > 0 && maxival > maxpreferred / 2) {
+		maxival = maxpreferred / 2;
+		if (maxival < 4000)
+			maxival = 4000;
+
+		if (maxival >= 9000)
+			minival = maxival / 3;
+		else
+			minival = (maxival * 3) / 4;
+	}
+
+	odhcpd_urandom(&msecs, sizeof(msecs));
+	msecs = (labs(msecs) % (maxival - minival)) + minival;
+
+	struct icmpv6_opt adv_interval = {
+		.type = ND_OPT_RTR_ADV_INTERVAL,
+		.len = 1,
+		.data = {0, 0, maxival >> 24, maxival >> 16, maxival >> 8, maxival}
+	};
 
 	struct iovec iov[] = {{&adv, (uint8_t*)&adv.prefix[cnt] - (uint8_t*)&adv},
 			{&routes, routes_cnt * sizeof(*routes)},
 			{&dns, (dns_cnt) ? sizeof(dns) : 0},
 			{dns_addr, dns_cnt * sizeof(*dns_addr)},
-			{search, search->len * 8}};
-	struct sockaddr_in6 all_nodes = {AF_INET6, 0, 0, ALL_IPV6_NODES, 0};
+			{search, search->len * 8},
+			{&adv_interval, adv_interval.len * 8}};
+	struct sockaddr_in6 dest = {AF_INET6, 0, 0, ALL_IPV6_NODES, 0};
+
+	if (from && !IN6_IS_ADDR_UNSPECIFIED(from))
+		dest.sin6_addr = *from;
+
 	odhcpd_send(router_event.uloop.fd,
-			&all_nodes, iov, ARRAY_SIZE(iov), iface);
+			&dest, iov, ARRAY_SIZE(iov), iface);
+
+	return msecs;
+}
+
+
+static void trigger_router_advert(struct uloop_timeout *event)
+{
+	struct interface *iface = container_of(event, struct interface, timer_rs);
+	int msecs = send_router_advert(iface, NULL);
 
 	// Rearm timer if not shut down
-	if (event->cb) {
-		uint32_t maxinterval = iface->max_interval * 1000;
-		uint32_t mininterval = iface->min_interval * 1000;
+	if (event->cb)
+		uloop_timeout_set(event, msecs);
+}
 
-		if (maxpreferred > 0 && maxinterval > maxpreferred / 2) {
-			maxinterval = maxpreferred / 2;
-			if (maxinterval < 4000)
-				maxinterval = 4000;
+// Event handler for incoming ICMPv6 packets
+static void handle_icmpv6(void *addr, void *data, size_t len,
+		struct interface *iface, _unused void *dest)
+{
+	struct icmp6_hdr *hdr = data;
+	struct sockaddr_in6 *from = addr;
 
-			if (maxinterval >= 9000)
-				mininterval = maxinterval / 3;
-			else
-				mininterval = (maxinterval * 3) / 4;
-		}
+	if (!router_icmpv6_valid(addr, data, len))
+		return;
 
-		int msecs;
-		odhcpd_urandom(&msecs, sizeof(msecs));
-		msecs = (labs(msecs) % (maxinterval - mininterval)) + mininterval;
-		uloop_timeout_set(&iface->timer_rs, msecs);
+	if ((iface->ra == RELAYD_SERVER && !iface->master)) { // Server mode
+		if (hdr->icmp6_type == ND_ROUTER_SOLICIT)
+			send_router_advert(iface, &from->sin6_addr);
+	} else if (iface->ra == RELAYD_RELAY) { // Relay mode
+		if (hdr->icmp6_type == ND_ROUTER_ADVERT && iface->master)
+			forward_router_advertisement(data, len);
+		else if (hdr->icmp6_type == ND_ROUTER_SOLICIT && !iface->master)
+			forward_router_solicitation(odhcpd_get_master_interface());
 	}
 }
 

@@ -810,6 +810,9 @@ static size_t append_reply(uint8_t *buf, size_t buflen, uint16_t status,
 					n.addr.s6_addr32[3] = htonl(a->assigned);
 					size_t entrlen = sizeof(n) - 4;
 
+					if (!a->accept_reconf && iface->managed < RELAYD_MANAGED_NO_AFLAG)
+						n.preferred = htonl(1);
+
 #ifdef DHCPV6_OPT_PREFIX_CLASS
 					if (iface->ia_addr[i].has_class) {
 						entrlen += sizeof(pclass);
