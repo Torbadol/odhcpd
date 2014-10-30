@@ -331,7 +331,7 @@ static void handle_client_request(void *addr, void *data, size_t len,
 			iov[IOV_CERID].iov_len = sizeof(cerid);
 
 			if (IN6_IS_ADDR_UNSPECIFIED(&cerid.addr)) {
-				struct odhcpd_ipaddr addrs[MAX_ADDRS];
+				struct odhcpd_ipaddr addrs[32];
 				ssize_t len = odhcpd_get_interface_addresses(0, addrs,
 						ARRAY_SIZE(addrs));
 
