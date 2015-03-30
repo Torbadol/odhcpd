@@ -69,8 +69,6 @@ struct odhcpd_ipaddr {
 	struct in6_addr addr;
 	uint8_t prefix;
 	uint8_t dprefix;
-	bool has_class;
-	uint16_t class;
 	uint32_t preferred;
 	uint32_t valid;
 };
@@ -219,7 +217,6 @@ int init_ubus(void);
 const char* ubus_get_ifname(const char *name);
 void ubus_apply_network(void);
 bool ubus_has_prefix(const char *name, const char *ifname);
-bool ubus_get_class(const char *ifname, const struct in6_addr *addr, uint16_t *pclass);
 #endif
 
 
