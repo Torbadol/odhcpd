@@ -54,6 +54,8 @@
 #define ALL_IPV6_ROUTERS {{{0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,\
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02}}}
 
+#define MaxValidTime 65535
+#define MaxRtrAdvInterval (MaxValidTime / 3)
 
 struct interface;
 extern struct list_head leases;
@@ -144,13 +146,13 @@ struct interface {
 	int default_router;
 	int managed;
 	int route_preference;
-	unsigned min_interval;
-	unsigned max_interval;
-	unsigned lifetime;
-	unsigned curhoplimit;
-	unsigned reachable;
-	unsigned retransmit;
-	unsigned max_mtu;
+	unsigned ra_mininterval;
+	unsigned ra_maxinterval;
+	unsigned ra_lifetime;
+	unsigned ra_curhoplimit;
+	unsigned ra_reachable;
+	unsigned ra_retransmit;
+	unsigned ra_max_mtu;
 
 	// DHCPv4
 	struct in_addr dhcpv4_start;
@@ -200,7 +202,8 @@ struct interface* odhcpd_get_interface_by_index(int ifindex);
 struct interface* odhcpd_get_master_interface(void);
 int odhcpd_urandom(void *data, size_t len);
 void odhcpd_setup_route(const struct in6_addr *addr, int prefixlen,
-		const struct interface *iface, const struct in6_addr *gw, bool add);
+		const struct interface *iface, const struct in6_addr *gw,
+		int metric, bool add);
 
 void odhcpd_run(void);
 time_t odhcpd_time(void);
@@ -209,10 +212,6 @@ void odhcpd_hexlify(char *dst, const uint8_t *src, size_t len);
 
 int odhcpd_bmemcmp(const void *av, const void *bv, size_t bits);
 void odhcpd_bmemcpy(void *av, const void *bv, size_t bits);
-
-int odhcpd_iterate_interface_neighbors(const struct interface *iface,
-		void(*cb_neigh)(const struct in6_addr *addr,
-				const struct interface *iface, void *data), void *data);
 
 int config_parse_interface(void *data, size_t len, const char *iname, bool overwrite);
 

@@ -9,10 +9,6 @@
 
 #include "odhcpd.h"
 
-#define MaxRtrAdvInterval 600
-#define MinRtrAdvInterval (MaxRtrAdvInterval / 3)
-#define MaxPreferredTime  (3 * MaxRtrAdvInterval)
-
 static struct blob_buf b;
 static int reload_pipe[2];
 struct list_head leases = LIST_HEAD_INIT(leases);
@@ -37,20 +33,20 @@ enum {
 	IFACE_ATTR_ROUTER,
 	IFACE_ATTR_DNS,
 	IFACE_ATTR_DOMAIN,
-	IFACE_ATTR_DHCPV6_RAW,
 	IFACE_ATTR_FILTER_CLASS,
-	IFACE_ATTR_RA_MIN_INTERVAL,
-	IFACE_ATTR_RA_MAX_INTERVAL,
-	IFACE_ATTR_RA_LIFETIME,
+	IFACE_ATTR_DHCPV6_RAW,
 	IFACE_ATTR_RA_DEFAULT,
 	IFACE_ATTR_RA_MANAGEMENT,
+	IFACE_ATTR_RA_OFFLINK,
+	IFACE_ATTR_RA_PREFERENCE,
+	IFACE_ATTR_RA_ADVROUTER,
+	IFACE_ATTR_RA_MININTERVAL,
+	IFACE_ATTR_RA_MAXINTERVAL,
+	IFACE_ATTR_RA_LIFETIME,
 	IFACE_ATTR_RA_HOPLIMIT,
 	IFACE_ATTR_RA_REACHABLE,
 	IFACE_ATTR_RA_RETRANSMIT,
 	IFACE_ATTR_RA_MAX_MTU,
-	IFACE_ATTR_RA_OFFLINK,
-	IFACE_ATTR_RA_PREFERENCE,
-	IFACE_ATTR_RA_ADVROUTER,
 	IFACE_ATTR_PD_MANAGER,
 	IFACE_ATTR_PD_CER,
 	IFACE_ATTR_NDPROXY_ROUTING,
@@ -76,22 +72,22 @@ static const struct blobmsg_policy iface_attrs[IFACE_ATTR_MAX] = {
 	[IFACE_ATTR_ROUTER] = { .name = "router", .type = BLOBMSG_TYPE_ARRAY },
 	[IFACE_ATTR_DNS] = { .name = "dns", .type = BLOBMSG_TYPE_ARRAY },
 	[IFACE_ATTR_DOMAIN] = { .name = "domain", .type = BLOBMSG_TYPE_ARRAY },
-	[IFACE_ATTR_DHCPV6_RAW] = { .name = "dhcpv6_raw", .type = BLOBMSG_TYPE_STRING },
 	[IFACE_ATTR_FILTER_CLASS] = { .name = "filter_class", .type = BLOBMSG_TYPE_STRING },
-	[IFACE_ATTR_RA_MIN_INTERVAL] = { .name = "ra_min_interval", .type = BLOBMSG_TYPE_INT32 },
-	[IFACE_ATTR_RA_MAX_INTERVAL] = { .name = "ra_max_interval", .type = BLOBMSG_TYPE_INT32 },
-	[IFACE_ATTR_RA_LIFETIME] = { .name = "ra_lifetime", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_DHCPV6_RAW] = { .name = "dhcpv6_raw", .type = BLOBMSG_TYPE_STRING },
 	[IFACE_ATTR_PD_MANAGER] = { .name = "pd_manager", .type = BLOBMSG_TYPE_STRING },
 	[IFACE_ATTR_PD_CER] = { .name = "pd_cer", .type = BLOBMSG_TYPE_STRING },
 	[IFACE_ATTR_RA_DEFAULT] = { .name = "ra_default", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_MANAGEMENT] = { .name = "ra_management", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_OFFLINK] = { .name = "ra_offlink", .type = BLOBMSG_TYPE_BOOL },
+	[IFACE_ATTR_RA_PREFERENCE] = { .name = "ra_preference", .type = BLOBMSG_TYPE_STRING },
+	[IFACE_ATTR_RA_ADVROUTER] = { .name = "ra_advrouter", .type = BLOBMSG_TYPE_BOOL },
+	[IFACE_ATTR_RA_MININTERVAL] = { .name = "ra_mininterval", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_MAXINTERVAL] = { .name = "ra_maxinterval", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_LIFETIME] = { .name = "ra_lifetime", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_HOPLIMIT] = { .name = "ra_hoplimit", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_REACHABLE] = { .name = "ra_reachable", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_RETRANSMIT] = { .name = "ra_retransmit", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_MAX_MTU] = { .name = "ra_max_mtu", .type = BLOBMSG_TYPE_INT32 },
-	[IFACE_ATTR_RA_OFFLINK] = { .name = "ra_offlink", .type = BLOBMSG_TYPE_BOOL },
-	[IFACE_ATTR_RA_PREFERENCE] = { .name = "ra_preference", .type = BLOBMSG_TYPE_STRING },
-	[IFACE_ATTR_RA_ADVROUTER] = { .name = "ra_advrouter", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_NDPROXY_ROUTING] = { .name = "ndproxy_routing", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_NDPROXY_SLAVE] = { .name = "ndproxy_slave", .type = BLOBMSG_TYPE_BOOL },
 };
@@ -520,34 +516,6 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		memcpy(iface->filter_class, blobmsg_get_string(c), blobmsg_data_len(c) + 1);
 	}
 
-	if (!iface->min_interval)
-		iface->min_interval = MinRtrAdvInterval;
-
-	if (!iface->max_interval)
-		iface->max_interval = MaxRtrAdvInterval;
-
-	if (!iface->lifetime)
-		iface->lifetime = MaxPreferredTime;
-
-	if (tb[IFACE_ATTR_RA_MIN_INTERVAL] || tb[IFACE_ATTR_RA_MAX_INTERVAL] ||
-		tb[IFACE_ATTR_RA_LIFETIME]) {
-		if ((c = tb[IFACE_ATTR_RA_MIN_INTERVAL]))
-			iface->min_interval = blobmsg_get_u32(c);
-
-		if ((c = tb[IFACE_ATTR_RA_MAX_INTERVAL]))
-			iface->max_interval = blobmsg_get_u32(c);
-
-		if ((c = tb[IFACE_ATTR_RA_LIFETIME]))
-			iface->lifetime = blobmsg_get_u32(c);
-
-		if ((iface->min_interval < 3) ||
-			(iface->min_interval > iface->max_interval * 3 / 4) ||
-			(iface->max_interval < 4) ||
-			(iface->max_interval > 1800) ||
-			(3 * iface->max_interval > iface->lifetime))
-			goto err;
-	}
-
 	if ((c = tb[IFACE_ATTR_RA_DEFAULT]))
 		iface->default_router = blobmsg_get_u32(c);
 
@@ -557,28 +525,47 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		iface->managed = 1;
 
 	if ((c = tb[IFACE_ATTR_RA_HOPLIMIT])) {
-		iface->curhoplimit = blobmsg_get_u32(c);
-		if (iface->curhoplimit > 255)
+		iface->ra_curhoplimit = blobmsg_get_u32(c);
+		if (iface->ra_curhoplimit > 255)
 			goto err;
 	}
 
 	if ((c = tb[IFACE_ATTR_RA_REACHABLE])) {
-		iface->reachable = blobmsg_get_u32(c);
-		if (iface->reachable > 3600000)
+		iface->ra_reachable = blobmsg_get_u32(c);
+		if (iface->ra_reachable > 3600000)
 			goto err;
 	}
 
 	if ((c = tb[IFACE_ATTR_RA_RETRANSMIT]))
-		iface->retransmit = blobmsg_get_u32(c);
+		iface->ra_retransmit = blobmsg_get_u32(c);
 
 	if ((c = tb[IFACE_ATTR_RA_MAX_MTU]))
-		iface->max_mtu = blobmsg_get_u32(c);
+		iface->ra_max_mtu = blobmsg_get_u32(c);
 
 	if ((c = tb[IFACE_ATTR_RA_OFFLINK]))
 		iface->ra_not_onlink = blobmsg_get_bool(c);
 
 	if ((c = tb[IFACE_ATTR_RA_ADVROUTER]))
 		iface->ra_advrouter = blobmsg_get_bool(c);
+
+	if ((c = tb[IFACE_ATTR_RA_MININTERVAL])) {
+		iface->ra_mininterval = blobmsg_get_u32(c);
+		if (iface->ra_mininterval && iface->ra_mininterval < 3)
+			goto err;
+	}
+
+	if ((c = tb[IFACE_ATTR_RA_MAXINTERVAL])) {
+		    iface->ra_maxinterval = blobmsg_get_u32(c);
+		    if (iface->ra_maxinterval &&
+			(iface->ra_maxinterval < 4 || iface->ra_maxinterval > MaxRtrAdvInterval))
+			    goto err;
+	}
+
+	if ((c = tb[IFACE_ATTR_RA_LIFETIME])) {
+		iface->ra_lifetime = blobmsg_get_u32(c);
+		if (iface->ra_maxinterval && iface->ra_lifetime && (3 * iface->ra_maxinterval > iface->ra_lifetime))
+			goto err;
+	}
 
 	if ((c = tb[IFACE_ATTR_RA_PREFERENCE])) {
 		const char *prio = blobmsg_get_string(c);

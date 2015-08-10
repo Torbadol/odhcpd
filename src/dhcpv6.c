@@ -51,7 +51,7 @@ int setup_dhcpv6_interface(struct interface *iface, bool enable)
 	}
 
 	// Configure multicast settings
-	if (enable && iface->dhcpv6 && !iface->master) {
+	if (enable && iface->dhcpv6) {
 		int sock = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
 		if (sock < 0) {
 			syslog(LOG_ERR, "Failed to create DHCPv6 server socket: %s",
@@ -532,5 +532,5 @@ static void relay_client_request(struct sockaddr_in6 *source,
 	struct sockaddr_in6 dhcpv6_servers = {AF_INET6,
 			htons(DHCPV6_SERVER_PORT), 0, ALL_DHCPV6_SERVERS, 0};
 	struct iovec iov[2] = {{&hdr, sizeof(hdr)}, {(void*)data, len}};
-	odhcpd_send(iface->dhcpv6_event.uloop.fd, &dhcpv6_servers, iov, 2, master);
+	odhcpd_send(master->dhcpv6_event.uloop.fd, &dhcpv6_servers, iov, 2, master);
 }
