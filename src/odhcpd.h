@@ -55,7 +55,7 @@
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02}}}
 
 #define MaxValidTime 65535
-#define MaxRtrAdvInterval (MaxValidTime / 3)
+#define MaxRtrAdvInterval 1800
 
 struct interface;
 extern struct list_head leases;
@@ -155,8 +155,6 @@ struct interface {
 	unsigned ra_max_mtu;
 
 	// DHCPv4
-	struct in_addr dhcpv4_addr;
-	struct in_addr dhcpv4_mask;
 	struct in_addr dhcpv4_start;
 	struct in_addr dhcpv4_end;
 	struct in_addr *dhcpv4_router;
@@ -196,7 +194,7 @@ ssize_t odhcpd_send(int socket, struct sockaddr_in6 *dest,
 		const struct interface *iface);
 ssize_t odhcpd_get_interface_addresses(int ifindex,
 		struct odhcpd_ipaddr *addrs, size_t cnt);
-int odhcpd_get_preferred_interface_address(int ifindex, struct in6_addr *addr);
+int odhcpd_get_linklocal_interface_address(int ifindex, struct in6_addr *lladdr);
 struct interface* odhcpd_get_interface_by_name(const char *name);
 int odhcpd_get_interface_config(const char *ifname, const char *what);
 int odhcpd_get_mac(const struct interface *iface, uint8_t mac[6]);
@@ -222,8 +220,6 @@ int init_ubus(void);
 const char* ubus_get_ifname(const char *name);
 void ubus_apply_network(void);
 bool ubus_has_prefix(const char *name, const char *ifname);
-const char* ubus_get_address4(const char *name);
-int ubus_get_mask4(const char *name);
 #endif
 
 
