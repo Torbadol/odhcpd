@@ -383,7 +383,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		unsigned rem;
 
 		blobmsg_for_each_attr(cur, c, rem) {
-			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, NULL))
+			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, false))
 				continue;
 
 			iface->upstream = realloc(iface->upstream,
@@ -430,7 +430,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		unsigned rem;
 
 		blobmsg_for_each_attr(cur, c, rem) {
-			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, NULL))
+			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, false))
 				continue;
 
 			struct in_addr addr4;
@@ -453,7 +453,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 
 		iface->always_rewrite_dns = true;
 		blobmsg_for_each_attr(cur, c, rem) {
-			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, NULL))
+			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, false))
 				continue;
 
 			struct in_addr addr4;
@@ -483,7 +483,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		unsigned rem;
 
 		blobmsg_for_each_attr(cur, c, rem) {
-			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, NULL))
+			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, false))
 				continue;
 
 			uint8_t buf[256];
