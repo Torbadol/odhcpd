@@ -221,6 +221,9 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 	if (iface->ra_max_mtu && (unsigned)mtu > iface->ra_max_mtu)
 		mtu = iface->ra_max_mtu;
 
+	if (iface->ra_curhoplimit && (unsigned)hlim > iface->ra_curhoplimit)
+		hlim = iface->ra_curhoplimit;
+
 	if (mtu < 1280)
 		mtu = 1280;
 
@@ -244,7 +247,6 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 	if (iface->managed >= RELAYD_MANAGED_MFLAG)
 		adv.h.nd_ra_flags_reserved |= ND_RA_FLAG_MANAGED;
 
-	adv.h.nd_ra_curhoplimit = iface->ra_curhoplimit;
 	adv.h.nd_ra_reachable = htonl(iface->ra_reachable);
 	adv.h.nd_ra_retransmit = htonl(iface->ra_retransmit);
 
