@@ -245,8 +245,8 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 		adv.h.nd_ra_flags_reserved |= ND_RA_FLAG_MANAGED;
 
 	adv.h.nd_ra_curhoplimit = iface->ra_curhoplimit;
-	adv.h.nd_ra_reachable = iface->ra_reachable;
-	adv.h.nd_ra_retransmit = iface->ra_retransmit;
+	adv.h.nd_ra_reachable = htonl(iface->ra_reachable);
+	adv.h.nd_ra_retransmit = htonl(iface->ra_retransmit);
 
 	if (iface->route_preference < 0)
 		adv.h.nd_ra_flags_reserved |= ND_RA_PREF_LOW;
@@ -335,7 +335,7 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 				"on %s thus we don't announce a default route!", iface->ifname);
 		adv.h.nd_ra_router_lifetime = 0;
 	} else if (iface->ra_lifetime && iface->ra_lifetime < ntohs(adv.h.nd_ra_router_lifetime))
-		adv.h.nd_ra_router_lifetime = htons(iface->ra_lifetime); 
+		adv.h.nd_ra_router_lifetime = htons(iface->ra_lifetime);
 
 	// DNS Recursive DNS
 	if (iface->dns_cnt > 0) {
