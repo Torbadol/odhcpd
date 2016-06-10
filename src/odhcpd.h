@@ -98,6 +98,7 @@ struct lease {
 	struct ether_addr mac;
 	uint16_t duid_len;
 	uint8_t *duid;
+	uint32_t dhcpv4_leasetime;
 	char hostname[];
 };
 
