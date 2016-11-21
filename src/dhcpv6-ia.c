@@ -247,7 +247,7 @@ void dhcpv6_write_statefile(void)
 							iface->ifname, duidbuf, ntohl(c->iaid),
 							(c->hostname ? c->hostname : "-"),
 							(c->valid_until > now ?
-								(c->valid_until - now + wall_time) : 
+								(c->valid_until - now + wall_time) :
 								(INFINITE_VALID(c->valid_until) ? -1 : 0)),
 							c->assigned, (unsigned)c->length);
 
