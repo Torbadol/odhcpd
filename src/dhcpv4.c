@@ -181,6 +181,8 @@ int setup_dhcpv4_interface(struct interface *iface, bool enable)
 			a->addr = ntohl(lease->ipaddr.s_addr);
 			memcpy(a->hwaddr, lease->mac.ether_addr_octet, sizeof(a->hwaddr));
 			memcpy(a->hostname, lease->hostname, hostlen);
+			/* Static assignment */
+			a->flags |= OAF_STATIC;
 			/* Infinite valid */
 			a->valid_until = 0;
 
@@ -645,7 +647,7 @@ static struct dhcpv4_assignment* dhcpv4_lease(struct interface *iface,
 		if (assigned) {
 			bool is_discover = (msg == DHCPV4_MSG_DISCOVER);
 
-			if (!INFINITE_VALID(a->valid_until))
+			if (!(a->flags & OAF_STATIC))
 				// Was only a discover; mark binding for removal
 				a->valid_until = (is_discover ? now : ((*leasetime == UINT32_MAX) ?
 							0 : (time_t)(now + *leasetime)));
@@ -664,13 +666,13 @@ static struct dhcpv4_assignment* dhcpv4_lease(struct interface *iface,
 	} else if (msg == DHCPV4_MSG_RELEASE && a) {
 		a->flags &= ~OAF_BOUND;
 
-		if (!INFINITE_VALID(a->valid_until))
+		if (!(a->flags & OAF_STATIC))
 			a->valid_until = now - 1;
 
 	} else if (msg == DHCPV4_MSG_DECLINE && a) {
 		a->flags &= ~OAF_BOUND;
 
-		if (!INFINITE_VALID(a->valid_until)) {
+		if (!(a->flags & OAF_STATIC)) {
 			memset(a->hwaddr, 0, sizeof(a->hwaddr));
 			a->valid_until = now + 3600; // Block address for 1h
 		}

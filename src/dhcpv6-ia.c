@@ -114,6 +114,8 @@ int setup_dhcpv6_ia_interface(struct interface *iface, bool enable)
 			odhcpd_urandom(a->key, sizeof(a->key));
 			memcpy(a->clid_data, lease->duid, lease->duid_len);
 			memcpy(a->mac, lease->mac.ether_addr_octet, sizeof(a->mac));
+			/* Static assignment */
+			a->flags |= OAF_STATIC;
 			/* Infinite valid */
 			a->valid_until = 0;
 
@@ -442,7 +444,7 @@ static void managed_handle_pd_data(struct ustream *s, _unused int bytes_new)
 
 	if (first && c->managed_size == 0)
 		free_dhcpv6_assignment(c);
-	else if (first)
+	else if (first && !(c->flags & OAF_STATIC))
 		c->valid_until = now + 150;
 }
 
@@ -451,7 +453,10 @@ static void managed_handle_pd_data(struct ustream *s, _unused int bytes_new)
 static void managed_handle_pd_done(struct ustream *s)
 {
 	struct dhcpv6_assignment *c = container_of(s, struct dhcpv6_assignment, managed_sock);
-	c->valid_until = odhcpd_time() + 15;
+
+	if (!(c->flags & OAF_STATIC))
+		c->valid_until = odhcpd_time() + 15;
+
 	c->managed_size = 0;
 	if (c->accept_reconf)
 		c->reconf_cnt = 1;
@@ -476,7 +481,9 @@ static bool assign_pd(struct interface *iface, struct dhcpv6_assignment *assign)
 					iaidbuf, assign->iaid, assign->length);
 			ustream_write_pending(&assign->managed_sock.stream);
 			assign->managed_size = -1;
-			assign->valid_until = odhcpd_time() + 15;
+			if (!(assign->flags & OAF_STATIC))
+				assign->valid_until = odhcpd_time() + 15;
+
 			list_add(&assign->head, &iface->ia_assignments);
 
 			// Wait initial period of up to 250ms for immediate assignment
@@ -1041,7 +1048,7 @@ ssize_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct interface *iface,
 		list_for_each_entry(c, &iface->ia_assignments, head) {
 			if (((c->clid_len == clid_len && !memcmp(c->clid_data, clid_data, clid_len)) ||
 					(c->clid_len >= clid_len && !c->clid_data[0] && !c->clid_data[1]
-					        && !memcmp(c->mac, mac, sizeof(mac)))) &&
+						&& !memcmp(c->mac, mac, sizeof(mac)))) &&
 					(c->iaid == ia->iaid || INFINITE_VALID(c->valid_until) || now < c->valid_until) &&
 					((is_pd && c->length <= 64) || (is_na && c->length == 128))) {
 				a = c;
@@ -1130,7 +1137,7 @@ ssize_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct interface *iface,
 			if (assigned && hdr->msg_type == DHCPV6_MSG_SOLICIT) {
 				a->flags &= ~OAF_BOUND;
 
-				if (!INFINITE_VALID(a->valid_until))
+				if (!(a->flags & OAF_STATIC))
 					a->valid_until = now;
 			} else if (assigned && hdr->msg_type == DHCPV6_MSG_REQUEST) {
 				if (hostname_len > 0) {
@@ -1161,7 +1168,7 @@ ssize_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct interface *iface,
 					apply_lease(iface, a, true);
 				}
 			} else if (hdr->msg_type == DHCPV6_MSG_RELEASE) {
-				if (!INFINITE_VALID(a->valid_until))
+				if (!(a->flags & OAF_STATIC))
 					a->valid_until = now - 1;
 
 				a->flags &= ~OAF_BOUND;
@@ -1169,7 +1176,7 @@ ssize_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct interface *iface,
 			} else if (hdr->msg_type == DHCPV6_MSG_DECLINE && a->length == 128) {
 				a->flags &= ~OAF_BOUND;
 
-				if (!INFINITE_VALID(a->valid_until)) {
+				if (!(a->flags & OAF_STATIC)) {
 					a->clid_len = 0;
 					a->valid_until = now + 3600; // Block address for 1h
 				}
