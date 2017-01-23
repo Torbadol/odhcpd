@@ -291,9 +291,9 @@ static int prefixcmp(const void *va, const void *vb)
 // Check address update
 static void check_updates(struct interface *iface)
 {
-	struct odhcpd_ipaddr addr[8] = {{IN6ADDR_ANY_INIT, 0, 0, 0, 0}};
+	struct odhcpd_ipaddr addr[RELAYD_MAX_ADDRS] = {{IN6ADDR_ANY_INIT, 0, 0, 0, 0}};
 	time_t now = odhcpd_time();
-	ssize_t len = odhcpd_get_interface_addresses(iface->ifindex, addr, 8);
+	ssize_t len = odhcpd_get_interface_addresses(iface->ifindex, addr, ARRAY_SIZE(addr));
 
 	if (len < 0)
 		return;
@@ -327,8 +327,10 @@ static void check_updates(struct interface *iface)
 	if (change)
 		dhcpv6_ia_postupdate(iface, now);
 
-	if (change)
+	if (change) {
+		syslog(LOG_INFO, "Raising SIGUSR1 due to address change on %s", iface->ifname);
 		raise(SIGUSR1);
+	}
 }
 
 
@@ -358,11 +360,15 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 				|| ndm->ndm_family != AF_INET6)
 			continue;
 
-		// Inform about a change in default route
-		if (is_route && rtm->rtm_dst_len == 0)
-			raise(SIGUSR1);
-		else if (is_route)
+		if (is_route) {
+			// Inform about a change in default route
+			if (rtm->rtm_dst_len == 0) {
+				syslog(LOG_INFO, "Raising SIGUSR1 due to default route change");
+				raise(SIGUSR1);
+			}
+
 			continue;
+		}
 
 		// Data to retrieve
 		size_t rta_offset = (is_addr) ?	sizeof(struct ifaddrmsg) : sizeof(*ndm);
@@ -472,9 +478,6 @@ static void handle_rtnetlink(_unused void *addr, void *data, size_t len,
 
 		if (is_addr) {
 			check_updates(iface);
-
-			if (iface->dhcpv6 == RELAYD_SERVER)
-				iface->ia_reconf = true;
 
 			if (iface->ndp == RELAYD_RELAY && iface->master) {
 				// Replay address changes on all slave interfaces

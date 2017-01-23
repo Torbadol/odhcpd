@@ -43,6 +43,7 @@
 
 #define RELAYD_BUFFER_SIZE 8192
 #define RELAYD_MAX_PREFIXES 8
+#define RELAYD_MAX_ADDRS 8
 
 #define INFINITE_VALID(x) ((x) == 0)
 
@@ -120,9 +121,8 @@ struct interface {
 	// Runtime data
 	struct uloop_timeout timer_rs;
 	struct list_head ia_assignments;
-	struct odhcpd_ipaddr ia_addr[8];
+	struct odhcpd_ipaddr ia_addr[RELAYD_MAX_ADDRS];
 	size_t ia_addr_len;
-	bool ia_reconf;
 
 	// DHCPv4
 	struct odhcpd_event dhcpv6_event;
