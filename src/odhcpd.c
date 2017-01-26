@@ -29,6 +29,7 @@
 #include <net/if.h>
 #include <netinet/ip6.h>
 #include <netpacket/packet.h>
+#include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 
 #include <sys/socket.h>
@@ -68,7 +69,7 @@ int main(int argc, char **argv)
 {
 	openlog("odhcpd", LOG_PERROR | LOG_PID, LOG_DAEMON);
 	int opt;
-	int log_level = LOG_WARNING;
+	int log_level = LOG_INFO;
 	while ((opt = getopt(argc, argv, "hl:")) != -1) {
 		switch (opt) {
 		case 'h':
@@ -219,8 +220,10 @@ ssize_t odhcpd_get_interface_addresses(int ifindex,
 		struct ifaddrmsg ifa;
 	} req = {{sizeof(req), RTM_GETADDR, NLM_F_REQUEST | NLM_F_DUMP,
 			++rtnl_seq, 0}, {AF_INET6, 0, 0, 0, ifindex}};
-	if (send(rtnl_socket, &req, sizeof(req), 0) < (ssize_t)sizeof(req))
+	if (send(rtnl_socket, &req, sizeof(req), 0) < (ssize_t)sizeof(req)) {
+		syslog(LOG_WARNING, "Request failed to dump IPv6 addresses (%s)", strerror(errno));
 		return 0;
+	}
 
 	uint8_t buf[8192];
 	ssize_t len = 0, ret = 0;
@@ -232,47 +235,58 @@ ssize_t odhcpd_get_interface_addresses(int ifindex,
 			if (len < 0 || !NLMSG_OK(nhm, (size_t)len)) {
 				if (errno == EINTR)
 					continue;
-				else
-					return ret;
+
+				syslog(LOG_WARNING, "Failed to receive IPv6 address rtnetlink message (%s)", strerror(errno));
+				ret = -1;
+				goto out;
 			}
 		}
 
-		if (nhm->nlmsg_type != RTM_NEWADDR)
+		switch (nhm->nlmsg_type) {
+		case RTM_NEWADDR: {
+			// Skip address but keep clearing socket buffer
+			if (ret >= (ssize_t)cnt)
+				continue;
+
+			struct ifaddrmsg *ifa = NLMSG_DATA(nhm);
+			if (ifa->ifa_scope != RT_SCOPE_UNIVERSE ||
+					(ifindex && ifa->ifa_index != (unsigned)ifindex))
+				continue;
+
+			struct rtattr *rta = (struct rtattr*)&ifa[1];
+			size_t alen = NLMSG_PAYLOAD(nhm, sizeof(*ifa));
+			memset(&addrs[ret], 0, sizeof(addrs[ret]));
+			addrs[ret].prefix = ifa->ifa_prefixlen;
+
+			while (RTA_OK(rta, alen)) {
+				if (rta->rta_type == IFA_ADDRESS) {
+					memcpy(&addrs[ret].addr, RTA_DATA(rta),
+							sizeof(struct in6_addr));
+				} else if (rta->rta_type == IFA_CACHEINFO) {
+					struct ifa_cacheinfo *ifc = RTA_DATA(rta);
+					addrs[ret].preferred = ifc->ifa_prefered;
+					addrs[ret].valid = ifc->ifa_valid;
+				}
+
+				rta = RTA_NEXT(rta, alen);
+			}
+
+			if (ifa->ifa_flags & IFA_F_DEPRECATED)
+				addrs[ret].preferred = 0;
+
+			++ret;
 			break;
-
-		// Skip address but keep clearing socket buffer
-		if (ret >= (ssize_t)cnt)
-			continue;
-
-		struct ifaddrmsg *ifa = NLMSG_DATA(nhm);
-		if (ifa->ifa_scope != RT_SCOPE_UNIVERSE ||
-				(ifindex && ifa->ifa_index != (unsigned)ifindex))
-			continue;
-
-		struct rtattr *rta = (struct rtattr*)&ifa[1];
-		size_t alen = NLMSG_PAYLOAD(nhm, sizeof(*ifa));
-		memset(&addrs[ret], 0, sizeof(addrs[ret]));
-		addrs[ret].prefix = ifa->ifa_prefixlen;
-
-		while (RTA_OK(rta, alen)) {
-			if (rta->rta_type == IFA_ADDRESS) {
-				memcpy(&addrs[ret].addr, RTA_DATA(rta),
-						sizeof(struct in6_addr));
-			} else if (rta->rta_type == IFA_CACHEINFO) {
-				struct ifa_cacheinfo *ifc = RTA_DATA(rta);
-				addrs[ret].preferred = ifc->ifa_prefered;
-				addrs[ret].valid = ifc->ifa_valid;
-			}
-
-			rta = RTA_NEXT(rta, alen);
+		}
+		case NLMSG_DONE:
+			goto out;
+		default:
+			syslog(LOG_WARNING, "Unexpected rtnetlink message (%d) in response to IPv6 address dump", nhm->nlmsg_type);
+			ret = -1;
+			goto out;
 		}
 
-		if (ifa->ifa_flags & IFA_F_DEPRECATED)
-			addrs[ret].preferred = 0;
-
-		++ret;
 	}
-
+out:
 	return ret;
 }
 
