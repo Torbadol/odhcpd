@@ -61,6 +61,7 @@
 #define MaxRtrAdvInterval 1800
 
 struct interface;
+struct nl_sock;
 extern struct list_head leases;
 
 struct odhcpd_event {
@@ -194,10 +195,11 @@ extern struct list_head interfaces;
 
 
 // Exported main functions
-int odhcpd_open_rtnl(void);
+struct nl_sock *odhcpd_open_rtnl(int protocol, int groups);
 int odhcpd_register(struct odhcpd_event *event);
 void odhcpd_process(struct odhcpd_event *event);
 
+struct nl_sock *odhcpd_create_nl_socket(int protocol, int groups);
 ssize_t odhcpd_send(int socket, struct sockaddr_in6 *dest,
 		struct iovec *iov, size_t iov_len,
 		const struct interface *iface);
@@ -210,9 +212,9 @@ int odhcpd_get_mac(const struct interface *iface, uint8_t mac[6]);
 struct interface* odhcpd_get_interface_by_index(int ifindex);
 struct interface* odhcpd_get_master_interface(void);
 int odhcpd_urandom(void *data, size_t len);
-void odhcpd_setup_route(const struct in6_addr *addr, int prefixlen,
+int odhcpd_setup_route(const struct in6_addr *addr, int prefixlen,
 		const struct interface *iface, const struct in6_addr *gw,
-		int metric, bool add);
+		uint32_t metric, bool add);
 
 void odhcpd_run(void);
 time_t odhcpd_time(void);
