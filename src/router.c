@@ -212,6 +212,49 @@ static bool parse_routes(struct odhcpd_ipaddr *n, ssize_t len)
 	return found_default;
 }
 
+static int calc_adv_interval(struct interface *iface, uint32_t minvalid,
+		uint32_t *maxival)
+{
+	uint32_t minival = iface->ra_mininterval;
+	int msecs;
+
+	*maxival = iface->ra_maxinterval;
+
+	if (*maxival > minvalid/3)
+		*maxival = minvalid/3;
+
+	if (*maxival > MaxRtrAdvInterval)
+		*maxival = MaxRtrAdvInterval;
+	else if (*maxival < 4)
+		*maxival = 4;
+
+	if (minival < MinRtrAdvInterval)
+		minival = MinRtrAdvInterval;
+	else if (minival > (*maxival * 3)/4)
+		minival = (*maxival >= 9 ? *maxival/3 : *maxival);
+
+	odhcpd_urandom(&msecs, sizeof(msecs));
+	msecs = (labs(msecs) % ((*maxival != minival) ? (*maxival - minival)*1000 : 500)) +
+			minival*1000;
+
+	return msecs;
+}
+
+static uint16_t calc_ra_lifetime(struct interface *iface, uint32_t maxival)
+{
+	uint16_t lifetime = 3*maxival;
+
+	if (iface->ra_lifetime >= 0) {
+		lifetime = iface->ra_lifetime;
+		if (lifetime < maxival)
+			lifetime = maxival;
+		else if (lifetime > 9000)
+			lifetime = 9000;
+	}
+
+	return lifetime;
+}
+
 // Router Advert server mode
 static uint64_t send_router_advert(struct interface *iface, const struct in6_addr *from)
 {
@@ -260,7 +303,9 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 	// If not currently shutting down
 	struct odhcpd_ipaddr addrs[RELAYD_MAX_ADDRS];
 	ssize_t ipcnt = 0;
-	int64_t minvalid = INT64_MAX;
+	uint32_t minvalid = UINT32_MAX;
+	bool default_route = false;
+	bool valid_prefix = false;
 
 	// If not shutdown
 	if (iface->timer_rs.cb) {
@@ -268,13 +313,13 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 		memcpy(addrs, iface->ia_addr, ipcnt * sizeof(*addrs));
 
 		// Check default route
-		if (iface->default_router > 1)
-			adv.h.nd_ra_router_lifetime = htons(iface->default_router);
-		else if (parse_routes(addrs, ipcnt))
-			adv.h.nd_ra_router_lifetime = htons(1);
+		if (iface->default_router) {
+			default_route = true;
 
-		syslog(LOG_INFO, "Initial RA router lifetime %d, %d address(es) available on %s",
-				ntohs(adv.h.nd_ra_router_lifetime), (int)ipcnt, iface->ifname);
+			if (iface->default_router > 1)
+				valid_prefix = true;
+		} else if (parse_routes(addrs, ipcnt))
+			default_route = true;
 	}
 
 	// Construct Prefix Information options
@@ -287,6 +332,8 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 
 	for (ssize_t i = 0; i < ipcnt; ++i) {
 		struct odhcpd_ipaddr *addr = &addrs[i];
+		uint32_t preferred = 0;
+		uint32_t valid = 0;
 
 		if (addr->prefix > 96 || addr->valid <= (uint32_t)now) {
 			char namebuf[INET6_ADDRSTRLEN];
@@ -312,20 +359,23 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 			p = &adv.prefix[cnt++];
 		}
 
-		if (addr->preferred > (uint32_t)now &&
-				minvalid > 1000LL * TIME_LEFT(addr->valid, now))
-			minvalid = 1000LL * TIME_LEFT(addr->valid, now);
+		if (addr->preferred > (uint32_t)now) {
+			preferred = TIME_LEFT(addr->preferred, now);
 
-		uint32_t this_lifetime = TIME_LEFT(addr->valid, now);
-		if (this_lifetime > UINT16_MAX)
-			this_lifetime = UINT16_MAX;
-		if (((addr->addr.s6_addr[0] & 0xfe) != 0xfc || iface->default_router)
-				&& adv.h.nd_ra_router_lifetime
-				&& ntohs(adv.h.nd_ra_router_lifetime) < this_lifetime) {
-			adv.h.nd_ra_router_lifetime = htons(this_lifetime);
-
-			syslog(LOG_INFO, "Updating RA router lifetime to %d on %s", this_lifetime, iface->ifname);
+			if (iface->ra_useleasetime &&
+					preferred > iface->dhcpv4_leasetime)
+				preferred = iface->dhcpv4_leasetime;
 		}
+
+		valid = TIME_LEFT(addr->valid, now);
+		if (iface->ra_useleasetime && valid > iface->dhcpv4_leasetime)
+			valid = iface->dhcpv4_leasetime;
+
+		if (minvalid > valid)
+			minvalid = valid;
+
+		if (!IN6_IS_ADDR_ULA(&addr->addr) || iface->default_router)
+			valid_prefix = true;
 
 		odhcpd_bmemcpy(&p->nd_opt_pi_prefix, &addr->addr,
 				(iface->ra_advrouter) ? 128 : addr->prefix);
@@ -339,19 +389,26 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_AUTO;
 		if (iface->ra_advrouter)
 			p->nd_opt_pi_flags_reserved |= ND_OPT_PI_FLAG_RADDR;
-		p->nd_opt_pi_valid_time = htonl(TIME_LEFT(addr->valid, now));
-		if (addr->preferred > (uint32_t)now)
-			p->nd_opt_pi_preferred_time = htonl(TIME_LEFT(addr->preferred, now));
-		else if (addr->valid - now < 7200)
-			p->nd_opt_pi_valid_time = 0;
+		p->nd_opt_pi_preferred_time = htonl(preferred);
+		p->nd_opt_pi_valid_time = htonl(valid);
 	}
 
-	if (!iface->default_router && adv.h.nd_ra_router_lifetime == htons(1)) {
-		syslog(LOG_WARNING, "A default route is present but there is no public prefix "
-				"on %s thus we don't announce a default route!", iface->ifname);
+	// Calculate periodic transmit
+	uint32_t maxival;
+	int msecs = calc_adv_interval(iface, minvalid, &maxival);
+
+	if (default_route) {
+		if (!valid_prefix) {
+			syslog(LOG_WARNING, "A default route is present but there is no public prefix "
+					"on %s thus we don't announce a default route!", iface->ifname);
+			adv.h.nd_ra_router_lifetime = 0;
+		} else
+			adv.h.nd_ra_router_lifetime = htons(calc_ra_lifetime(iface, maxival));
+
+	} else
 		adv.h.nd_ra_router_lifetime = 0;
-	} else if (iface->ra_lifetime && iface->ra_lifetime < ntohs(adv.h.nd_ra_router_lifetime))
-		adv.h.nd_ra_router_lifetime = htons(iface->ra_lifetime);
+
+	syslog(LOG_INFO, "Using a RA lifetime of %d seconds on %s", ntohs(adv.h.nd_ra_router_lifetime), iface->ifname);
 
 	// DNS Recursive DNS
 	if (iface->dns_cnt > 0) {
@@ -444,34 +501,13 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 		++routes_cnt;
 	}
 
-	// Calculate periodic transmit
-	int msecs = 0;
-	uint32_t maxival = iface->ra_maxinterval * 1000;
-	uint32_t minival = iface->ra_mininterval * 1000;
-
-	if (maxival < 4000 || maxival > MaxRtrAdvInterval * 1000)
-		maxival = MaxRtrAdvInterval * 1000;
-
-	if (maxival > minvalid / 3) {
-		maxival = minvalid / 3;
-
-		if (maxival < 4000)
-			maxival = 4000;
-	}
-
-	if (!minival || minival > (maxival * 3) / 4)
-		minival = (maxival * 3) / 4;
-
-	search->lifetime = htonl(maxival / 100);
+	search->lifetime = htonl(maxival*10);
 	dns.lifetime = search->lifetime;
-
-	odhcpd_urandom(&msecs, sizeof(msecs));
-	msecs = (labs(msecs) % (maxival - minival)) + minival;
 
 	struct icmpv6_opt adv_interval = {
 		.type = ND_OPT_RTR_ADV_INTERVAL,
 		.len = 1,
-		.data = {0, 0, maxival >> 24, maxival >> 16, maxival >> 8, maxival}
+		.data = {0, 0, (maxival*1000) >> 24, (maxival*1000) >> 16, (maxival*1000) >> 8, maxival*1000}
 	};
 
 	struct iovec iov[RA_IOV_LEN] = {

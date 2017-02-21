@@ -57,8 +57,7 @@
 #define ALL_IPV6_ROUTERS {{{0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,\
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02}}}
 
-#define MaxValidTime 65535
-#define MaxRtrAdvInterval 1800
+#define IN6_IS_ADDR_ULA(a) (((a)->s6_addr32[0] & htonl(0xfe000000)) == htonl(0xfc000000))
 
 struct interface;
 struct nl_sock;
@@ -98,6 +97,7 @@ struct config {
 	bool legacy;
 	char *dhcp_cb;
 	char *dhcp_statefile;
+	int log_level;
 } config;
 
 
@@ -150,6 +150,7 @@ struct interface {
 	bool always_rewrite_dns;
 	bool ra_not_onlink;
 	bool ra_advrouter;
+	bool ra_useleasetime;
 	bool no_dynamic_dhcp;
 
 	// RA
@@ -157,9 +158,9 @@ struct interface {
 	int default_router;
 	int managed;
 	int route_preference;
-	unsigned ra_mininterval;
-	unsigned ra_maxinterval;
-	unsigned ra_lifetime;
+	int ra_maxinterval;
+	int ra_mininterval;
+	int ra_lifetime;
 	unsigned ra_curhoplimit;
 	unsigned ra_reachable;
 	unsigned ra_retransmit;

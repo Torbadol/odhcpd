@@ -6,6 +6,7 @@
 #include <libgen.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <syslog.h>
 
 #include <uci.h>
 #include <uci_blob.h>
@@ -16,7 +17,8 @@ static struct blob_buf b;
 static int reload_pipe[2];
 struct list_head leases = LIST_HEAD_INIT(leases);
 struct list_head interfaces = LIST_HEAD_INIT(interfaces);
-struct config config = {false, NULL, NULL};
+struct config config = {.legacy = false, .dhcp_cb = NULL,
+			.dhcp_statefile = NULL, .log_level = LOG_INFO};
 
 enum {
 	IFACE_ATTR_INTERFACE,
@@ -46,6 +48,7 @@ enum {
 	IFACE_ATTR_RA_MININTERVAL,
 	IFACE_ATTR_RA_MAXINTERVAL,
 	IFACE_ATTR_RA_LIFETIME,
+	IFACE_ATTR_RA_USELEASETIME,
 	IFACE_ATTR_RA_HOPLIMIT,
 	IFACE_ATTR_RA_REACHABLE,
 	IFACE_ATTR_RA_RETRANSMIT,
@@ -87,6 +90,7 @@ static const struct blobmsg_policy iface_attrs[IFACE_ATTR_MAX] = {
 	[IFACE_ATTR_RA_MININTERVAL] = { .name = "ra_mininterval", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_MAXINTERVAL] = { .name = "ra_maxinterval", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_LIFETIME] = { .name = "ra_lifetime", .type = BLOBMSG_TYPE_INT32 },
+	[IFACE_ATTR_RA_USELEASETIME] = { .name = "ra_useleasetime", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_RA_HOPLIMIT] = { .name = "ra_hoplimit", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_REACHABLE] = { .name = "ra_reachable", .type = BLOBMSG_TYPE_INT32 },
 	[IFACE_ATTR_RA_RETRANSMIT] = { .name = "ra_retransmit", .type = BLOBMSG_TYPE_INT32 },
@@ -135,6 +139,7 @@ enum {
 	ODHCPD_ATTR_MAINDHCP,
 	ODHCPD_ATTR_LEASEFILE,
 	ODHCPD_ATTR_LEASETRIGGER,
+	ODHCPD_ATTR_LOGLEVEL,
 	ODHCPD_ATTR_MAX
 };
 
@@ -142,6 +147,7 @@ static const struct blobmsg_policy odhcpd_attrs[LEASE_ATTR_MAX] = {
 	[ODHCPD_ATTR_MAINDHCP] = { .name = "maindhcp", .type = BLOBMSG_TYPE_BOOL },
 	[ODHCPD_ATTR_LEASEFILE] = { .name = "leasefile", .type = BLOBMSG_TYPE_STRING },
 	[ODHCPD_ATTR_LEASETRIGGER] = { .name = "leasetrigger", .type = BLOBMSG_TYPE_STRING },
+	[ODHCPD_ATTR_LOGLEVEL] = { .name = "loglevel", .type = BLOBMSG_TYPE_INT32 },
 };
 
 const struct uci_blob_param_list odhcpd_attr_list = {
@@ -196,6 +202,10 @@ static void set_interface_defaults(struct interface *iface)
 {
 	iface->managed = 1;
 	iface->learn_routes = 1;
+	iface->dhcpv4_leasetime = 43200;
+	iface->ra_maxinterval = 600;
+	iface->ra_mininterval = iface->ra_maxinterval/3;
+	iface->ra_lifetime = -1;
 }
 
 static void clean_interface(struct interface *iface)
@@ -259,6 +269,15 @@ static void set_config(struct uci_section *s)
 		free(config.dhcp_cb);
 		config.dhcp_cb = strdup(blobmsg_get_string(c));
 	}
+
+	if ((c = tb[ODHCPD_ATTR_LOGLEVEL])) {
+		int log_level = (blobmsg_get_u32(c) & LOG_PRIMASK);
+
+		if (config.log_level != log_level) {
+			config.log_level = log_level;
+			setlogmask(LOG_UPTO(config.log_level));
+		}
+	}
 }
 
 static double parse_leasetime(struct blob_attr *c) {
@@ -280,10 +299,10 @@ static double parse_leasetime(struct blob_attr *c) {
 			goto err;
 	}
 
-	if (time >= 60)
-		return time;
+	if (time < 60)
+		time = 60;
 
-	return 0;
+	return time;
 
 err:
 	return -1;
@@ -343,8 +362,7 @@ static int set_lease(struct uci_section *s)
 		if (time < 0)
 			goto err;
 
-		if (time >= 60)
-			lease->dhcpv4_leasetime = time;
+		lease->dhcpv4_leasetime = time;
 	}
 
 	list_add(&lease->head, &leases);
@@ -417,8 +435,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		if (time < 0)
 			goto err;
 
-		if (time >= 60)
-			iface->dhcpv4_leasetime = time;
+		iface->dhcpv4_leasetime = time;
 	}
 
 	if ((c = tb[IFACE_ATTR_START])) {
@@ -601,24 +618,17 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 	if ((c = tb[IFACE_ATTR_RA_ADVROUTER]))
 		iface->ra_advrouter = blobmsg_get_bool(c);
 
-	if ((c = tb[IFACE_ATTR_RA_MININTERVAL])) {
-		iface->ra_mininterval = blobmsg_get_u32(c);
-		if (iface->ra_mininterval && iface->ra_mininterval < 3)
-			goto err;
-	}
+	if ((c = tb[IFACE_ATTR_RA_MININTERVAL]))
+		iface->ra_mininterval =  blobmsg_get_u32(c);
 
-	if ((c = tb[IFACE_ATTR_RA_MAXINTERVAL])) {
-		    iface->ra_maxinterval = blobmsg_get_u32(c);
-		    if (iface->ra_maxinterval &&
-			(iface->ra_maxinterval < 4 || iface->ra_maxinterval > MaxRtrAdvInterval))
-			    goto err;
-	}
+	if ((c = tb[IFACE_ATTR_RA_MAXINTERVAL]))
+		iface->ra_maxinterval = blobmsg_get_u32(c);
 
-	if ((c = tb[IFACE_ATTR_RA_LIFETIME])) {
+	if ((c = tb[IFACE_ATTR_RA_LIFETIME]))
 		iface->ra_lifetime = blobmsg_get_u32(c);
-		if (iface->ra_maxinterval && iface->ra_lifetime && (3 * iface->ra_maxinterval > iface->ra_lifetime))
-			goto err;
-	}
+
+	if ((c = tb[IFACE_ATTR_RA_USELEASETIME]))
+		iface->ra_useleasetime = blobmsg_get_bool(c);
 
 	if ((c = tb[IFACE_ATTR_RA_PREFERENCE])) {
 		const char *prio = blobmsg_get_string(c);
