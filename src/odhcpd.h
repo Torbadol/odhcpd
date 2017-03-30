@@ -207,7 +207,8 @@ ssize_t odhcpd_send(int socket, struct sockaddr_in6 *dest,
 		const struct interface *iface);
 ssize_t odhcpd_get_interface_addresses(int ifindex,
 		struct odhcpd_ipaddr *addrs, size_t cnt);
-int odhcpd_get_linklocal_interface_address(int ifindex, struct in6_addr *lladdr);
+int odhcpd_get_interface_dns_addr(const struct interface *iface,
+		struct in6_addr *addr);
 struct interface* odhcpd_get_interface_by_name(const char *name);
 int odhcpd_get_interface_config(const char *ifname, const char *what);
 int odhcpd_get_mac(const struct interface *iface, uint8_t mac[6]);
@@ -229,6 +230,9 @@ int odhcpd_bmemcmp(const void *av, const void *bv, size_t bits);
 void odhcpd_bmemcpy(void *av, const void *bv, size_t bits);
 
 int config_parse_interface(void *data, size_t len, const char *iname, bool overwrite);
+
+void ndp_handle_addr6_dump(void);
+void ndp_rqs_addr6_dump(void);
 
 #ifdef WITH_UBUS
 int init_ubus(void);

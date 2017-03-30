@@ -120,6 +120,7 @@ int setup_router_interface(struct interface *iface, bool enable)
 		} else if (iface->ra == RELAYD_SERVER && !iface->master) {
 			iface->timer_rs.cb = trigger_router_advert;
 			uloop_timeout_set(&iface->timer_rs, 1000);
+			ndp_rqs_addr6_dump();
 		}
 
 		if (iface->ra == RELAYD_RELAY || (iface->ra == RELAYD_SERVER && !iface->master))
@@ -328,7 +329,7 @@ static uint64_t send_router_advert(struct interface *iface, const struct in6_add
 	struct in6_addr dns_pref, *dns_addr = &dns_pref;
 	size_t dns_cnt = 1;
 
-	odhcpd_get_linklocal_interface_address(iface->ifindex, &dns_pref);
+	odhcpd_get_interface_dns_addr(iface, &dns_pref);
 
 	for (ssize_t i = 0; i < ipcnt; ++i) {
 		struct odhcpd_ipaddr *addr = &addrs[i];
@@ -625,7 +626,7 @@ static void forward_router_advertisement(uint8_t *data, size_t len)
 			size_t rewrite_cnt = iface->dns_cnt;
 
 			if (rewrite_cnt == 0) {
-				if (odhcpd_get_linklocal_interface_address(iface->ifindex, &addr))
+				if (odhcpd_get_interface_dns_addr(iface, &addr))
 					continue; // Unable to comply
 
 				rewrite = &addr;

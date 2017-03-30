@@ -90,6 +90,9 @@ int setup_dhcpv6_interface(struct interface *iface, bool enable)
 		if (iface->dhcpv6 == RELAYD_SERVER)
 			setsockopt(sock, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, &server, sizeof(server));
 
+		if (iface->dhcpv6 != RELAYD_RELAY || !iface->master)
+			ndp_rqs_addr6_dump();
+
 		iface->dhcpv6_event.uloop.fd = sock;
 		iface->dhcpv6_event.handle_dgram = handle_dhcpv6;
 		odhcpd_register(&iface->dhcpv6_event);
@@ -229,7 +232,7 @@ static void handle_client_request(void *addr, void *data, size_t len,
 	size_t dns_cnt = iface->dns_cnt;
 
 	if ((dns_cnt == 0) &&
-		!odhcpd_get_linklocal_interface_address(iface->ifindex, &dns_addr)) {
+		!odhcpd_get_interface_dns_addr(iface, &dns_addr)) {
 		dns_addr_ptr = &dns_addr;
 		dns_cnt = 1;
 	}
@@ -461,7 +464,7 @@ static void relay_server_response(uint8_t *data, size_t len)
 		size_t rewrite_cnt = iface->dns_cnt;
 
 		if (rewrite_cnt == 0) {
-			if (odhcpd_get_linklocal_interface_address(iface->ifindex, &addr))
+			if (odhcpd_get_interface_dns_addr(iface, &addr))
 				return; // Unable to get interface address
 
 			rewrite = &addr;

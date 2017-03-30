@@ -33,9 +33,8 @@
 #include <netlink/socket.h>
 #include <netlink/attr.h>
 
-#include "router.h"
 #include "dhcpv6.h"
-#include "ndp.h"
+#include "odhcpd.h"
 
 struct event_socket {
 	struct odhcpd_event ev;
@@ -49,6 +48,7 @@ static void handle_rtnl_event(struct odhcpd_event *ev);
 static int cb_rtnl_valid(struct nl_msg *msg, void *arg);
 static void catch_rtnl_err(struct odhcpd_event *e, int error);
 
+static int addr6_dump_rqs = 0;
 static int ping_socket = -1;
 static struct event_socket rtnl_event = {
 	.ev = {
@@ -150,7 +150,7 @@ static void dump_neigh_table(const bool proxy)
 	nlmsg_free(msg);
 }
 
-static void dump_addr_table(void)
+static void dump_addr6_table(void)
 {
 	struct nl_msg *msg;
 	struct ifaddrmsg ifa = {
@@ -166,6 +166,20 @@ static void dump_addr_table(void)
 	nl_send_auto_complete(rtnl_event.sock, msg);
 
 	nlmsg_free(msg);
+}
+
+void ndp_handle_addr6_dump(void)
+{
+	if (!addr6_dump_rqs)
+		return;
+
+	dump_addr6_table();
+	addr6_dump_rqs = 0;
+}
+
+inline void ndp_rqs_addr6_dump(void)
+{
+	addr6_dump_rqs++;
 }
 
 int setup_ndp_interface(struct interface *iface, bool enable)
@@ -192,10 +206,6 @@ int setup_ndp_interface(struct interface *iface, bool enable)
 
 		dump_neigh = true;
 	}
-
-	if (enable && (iface->ra == RELAYD_SERVER ||
-			iface->dhcpv6 == RELAYD_SERVER || iface->ndp == RELAYD_RELAY))
-		dump_addr_table();
 
 	if (enable && iface->ndp == RELAYD_RELAY) {
 		if (write(procfd, "1\n", 2) < 0) {}
@@ -243,6 +253,8 @@ int setup_ndp_interface(struct interface *iface, bool enable)
 			dump_neigh_table(false);
 		else
 			dump_neigh = false;
+
+		ndp_rqs_addr6_dump();
 	}
 
 	if (dump_neigh)
@@ -350,8 +362,6 @@ static void check_addr_updates(struct interface *iface)
 	qsort(addr, len, sizeof(*addr), prefixcmp);
 
 	for (int i = 0; i < len; ++i) {
-		addr[i].addr.s6_addr32[3] = 0;
-
 		if (addr[i].preferred < UINT32_MAX - now)
 			addr[i].preferred += now;
 
@@ -382,7 +392,7 @@ static void check_addr_updates(struct interface *iface)
 	}
 }
 
-void setup_addr_for_relaying(struct in6_addr *addr, struct interface *iface, bool add)
+static void setup_addr_for_relaying(struct in6_addr *addr, struct interface *iface, bool add)
 {
 	struct interface *c;
 	char ipbuf[INET6_ADDRSTRLEN];
@@ -404,7 +414,7 @@ void setup_addr_for_relaying(struct in6_addr *addr, struct interface *iface, boo
 	}
 }
 
-void setup_ping6(struct in6_addr *addr, struct interface *iface)
+static void setup_ping6(struct in6_addr *addr, struct interface *iface)
 {
 	struct interface *c;
 
@@ -570,7 +580,7 @@ static void catch_rtnl_err(struct odhcpd_event *e, int error)
 	if (nl_socket_set_buffer_size(ev_sock->sock, ev_sock->sock_bufsize, 0))
 		goto err;
 
-	dump_addr_table();
+	dump_addr6_table();
 	return;
 
 err:
